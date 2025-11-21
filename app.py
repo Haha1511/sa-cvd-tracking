@@ -391,49 +391,26 @@ with tabs[0]:
         elif not measurements:
             st.info("No valid measurements entered; nothing saved.")
         else:
-            # ---------------- SAVE MEASUREMENTS IN-MEMORY ----------------
-            if not piece_id:
-                st.error("Piece ID / Serial Number is required.")
-            elif not measurements:
-                st.info("No valid measurements entered; nothing saved.")
+            ok, msg = add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements)
+            if ok:
+                st.session_state.clear_meas = True
+                st.session_state.clear_active = True
+
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                st.session_state["last_saved"] = now
+
+                st.session_state.form_key = f"form_add_{st.session_state.form_counter}"
+                st.session_state.form_counter += 1
+
+                # IMPORTANT: only store message here (do NOT display it yet)
+                st.session_state["pending_success"] = f"✅ Saved to Excel. ({msg}) — {now}"
+
+                if "analysis_cache" in st.session_state:
+                    st.session_state["analysis_cache"].pop((part,), None)
+
+                st.rerun()
             else:
-                try:
-                    # Create a new DataFrame to save
-                    df_to_save = pd.DataFrame(measurements)
-                    df_to_save["Part"] = part
-                    df_to_save["Machine"] = machine
-                    df_to_save["Chamber"] = chamber
-                    df_to_save["PieceID"] = piece_id
-                    df_to_save["PartFlow"] = part_flow
-                    df_to_save["Notes"] = notes
-                    df_to_save["Timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-                    # Save to memory (no Excel file locked issues)
-                    excel_buffer = BytesIO()
-                    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-                        df_to_save.to_excel(writer, index=False, sheet_name="Measurements")
-                    excel_buffer.seek(0)
-
-                    # Download button
-                    st.download_button(
-                        label="📥 Download Excel File",
-                        data=excel_buffer,
-                        file_name=f"{piece_id}_measurements.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-
-                    st.session_state.clear_meas = True
-                    st.session_state.clear_active = True
-                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    st.session_state["pending_success"] = f"✅ Measurements ready to download — {now}"
-
-                    st.session_state.form_key = f"form_add_{st.session_state.form_counter}"
-                    st.session_state.form_counter += 1
-                    st.rerun()
-
-                except Exception as e:
-                    st.error(f"❌ Failed to save measurements: {e}")
-
+                st.error(f"❌ Failed to save ***PLEASE MAKE SURE CLOSED EXCEL FILE FIRST***: {msg}")
 
     # ---------------- SHOW SUCCESS MESSAGE AT BOTTOM ----------------
     if "pending_success" in st.session_state:
