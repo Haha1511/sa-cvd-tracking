@@ -1,0 +1,16 @@
+[browser]
+serverAddress = "localhost"
+client = "chrome"
+gatherUsageStats = false
+
+[global]
+disableWatchdogWarning = true
+
+[theme]
+base = "dark"
+primaryColor = "#00FFC6"
+backgroundColor = "#0A0F0F"
+secondaryBackgroundColor = "#112626"
+textColor = "#E6FFFB"
+font = "sans serif"
+
