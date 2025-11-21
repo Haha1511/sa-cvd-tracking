@@ -292,51 +292,90 @@ from openpyxl import load_workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 
 def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements, timestamp=None):
-    ts = timestamp if timestamp else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ensure_workbook()
 
-    # ✔ Use your original EXCEL file variable
+    ts = timestamp if timestamp is not None else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # ✔ FIX: always use your original EXCEL file
     if not os.path.exists(EXCEL):
         return False, f"Excel file not found: {EXCEL}"
 
-    # Load workbook (preserves formatting)
-    wb = load_workbook(EXCEL)
+    # Read dataframes
+    df_part = read_sheet_safe(SHEET_MB if part == "Mixing Block" else SHEET_GW)
+    df_other = read_sheet_safe(SHEET_GW if part == "Mixing Block" else SHEET_MB)
+    df_specs = read_sheet_safe(SHEET_SPECS)
 
-    # Select the sheet
-    sheet_name = "Mixing Block Data" if part == "Mixing Block" else "Gas/Water Block"
-    if sheet_name not in wb.sheetnames:
-        return False, f"Sheet {sheet_name} not found in Excel"
-    
-    ws = wb[sheet_name]
-    
-    # Prepare rows to append
+    rows = []
     for m in measurements:
         hole = str(m.get("Hole")).lstrip("H")
         feat = m.get("Feature")
+
         try:
             val = float(m.get("Value"))
         except:
             val = None
-        
-        # Assuming _status_from_value exists
-        status, nominal, lsl, usl = _status_from_value(part, hole, feat, val if val is not None else 0.0)
-        img_path = m.get("ImagePath", None)
-        
-        new_row = [
-            ts, machine, part, chamber, piece_id, part_flow,
-            f"H{hole}", feat, val, nominal, lsl, usl, status, notes, img_path
-        ]
-        
-        ws.append(new_row)  # append to the sheet, formatting preserved
-    
-    try:
-        wb.save(EXISTING_EXCEL)
-        return True, "Saved successfully"
-    except PermissionError:
-        return False, "Excel file is open, please close it first"
-    except Exception as e:
-        return False, f"Failed to save: {str(e)}"
 
-    
+        status, nominal, lsl, usl = _status_from_value(
+            part, hole, feat, val if val is not None else 0.0
+        )
+
+        img_path = m.get("ImagePath", None)
+
+        rows.append({
+            "Timestamp": ts,
+            "Machine": machine,
+            "Part Type": part,
+            "Chamber": chamber,
+            "Piece ID": piece_id,
+            "Part In/Out": part_flow,
+            "Hole": f"H{hole}",
+            "Feature": feat,
+            "Value": val,
+            "Nominal": nominal,
+            "LSL": lsl,
+            "USL": usl,
+            "Status": status,
+            "Notes": notes,
+            "Image Path": img_path
+        })
+
+    if not rows:
+        return False, "No rows to add"
+
+    df_append = pd.DataFrame(rows, columns=DATA_COLS + ["Image Path"])
+
+    for c in ["Value", "Nominal", "LSL", "USL"]:
+        if c in df_append.columns:
+            df_append[c] = pd.to_numeric(df_append[c], errors="coerce")
+
+    df_part = pd.concat([df_part, df_append], ignore_index=True)
+
+    sheets = {
+        SHEET_MB: df_part if part == "Mixing Block" else df_other,
+        SHEET_GW: df_part if part == "Gas/Water Block" else df_other,
+        SHEET_SPECS: df_specs
+    }
+
+    # ✔ FIX: SAFE SAVE WITHOUT ANY EXISTING_EXCEL
+    saved, alt = atomic_write_all(EXCEL, sheets)
+
+    if saved:
+        try:
+            add_reference_image()
+        except:
+            pass
+        try:
+            apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
+        except:
+            pass
+        return True, saved
+
+    elif alt:
+        return False, f"Excel locked — saved clone to: {alt}"
+
+    else:
+        return False, "Failed to save"
+
 def get_available_holes_for_part(part):
     """Return hole list depending on part type."""
     if part.lower() == "mixing block":
