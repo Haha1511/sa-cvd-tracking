@@ -391,6 +391,7 @@ with tabs[0]:
         elif not measurements:
             st.info("No valid measurements entered; nothing saved.")
         else:
+            # ✅ Use the fixed add_measurement_rows that updates current_excel
             ok, msg = add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements)
             if ok:
                 st.session_state.clear_meas = True
@@ -402,23 +403,25 @@ with tabs[0]:
                 st.session_state.form_key = f"form_add_{st.session_state.form_counter}"
                 st.session_state.form_counter += 1
 
-                # IMPORTANT: only store message here (do NOT display it yet)
+                # IMPORTANT: store success message
                 st.session_state["pending_success"] = f"✅ Saved to Excel. ({msg}) — {now}"
 
                 if "analysis_cache" in st.session_state:
                     st.session_state["analysis_cache"].pop((part,), None)
 
-                st.rerun()
+                # 🔹 Refresh to show new data in View & Manage tab
+                st.experimental_rerun()
             else:
                 st.error(f"❌ Failed to save: {msg}")
 
         # ---------------- PROVIDE DOWNLOAD LINK ----------------
-        if os.path.exists(EXCEL):
-            with open(EXCEL, "rb") as f:
+        current_file = st.session_state.get("current_excel", EXCEL)
+        if os.path.exists(current_file):
+            with open(current_file, "rb") as f:
                 st.download_button(
                     label="📥 Download Latest Excel",
                     data=f,
-                    file_name=os.path.basename(EXCEL),
+                    file_name=os.path.basename(current_file),
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
@@ -426,6 +429,7 @@ with tabs[0]:
     if "pending_success" in st.session_state:
         st.success(st.session_state["pending_success"])
         del st.session_state["pending_success"]
+
 
 # ------------------ TAB 1: Trend Chart (with Analysis) ------------------
 with tabs[1]:
