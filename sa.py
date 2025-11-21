@@ -45,81 +45,55 @@ DATA_COLS = [
 
 SPECS_COLS = ["Part Type", "Hole", "Feature", "Nominal", "LSL", "USL", "Tolerance"]
 
+# ------------------ Initialize current Excel ------------------
+if "current_excel" not in st.session_state:
+    st.session_state["current_excel"] = EXCEL  # default starting file
+
 # ---------- Utilities ----------
-def atomic_write_all(filename, sheets_dict, retries=3, retry_delay=0.25):
+def atomic_write_all(filename, sheets_dict):
     """
-    Atomically write multiple DataFrame sheets to an Excel file.
-    - Returns (saved_path, None) on success.
-    - On PermissionError (file locked) will attempt to write a timestamped alternate file and return (None, alt_path).
-    - On other fatal errors returns (None, None).
+    Returns:
+        - saved_file: the actual saved file path
+        - backup_file: if Excel locked, the backup file path
     """
-    import time
     fd, tmp = tempfile.mkstemp(suffix=".xlsx")
     os.close(fd)
     try:
-        # Try a few times in case of transient errors
-        last_exc = None
-        for attempt in range(1, retries + 1):
-            try:
-                with pd.ExcelWriter(tmp, engine="openpyxl") as w:
-                    for sheet_name, df in sheets_dict.items():
-                        # ensure we write DataFrames (defensive)
-                        if not isinstance(df, pd.DataFrame):
-                            df = pd.DataFrame(df)
-                        df.to_excel(w, sheet_name=sheet_name, index=False)
-                # replace atomically
-                os.replace(tmp, filename)
-                return filename, None
-            except PermissionError as e:
-                last_exc = e
-                # If file locked, break to create alt
-                break
-            except Exception as e:
-                last_exc = e
-                # small backoff and retry
-                time.sleep(retry_delay)
-                continue
-
-        # If we got here and last exception is PermissionError or replace failed,
-        # attempt to save to a timestamped alternate file to avoid data loss.
+        with pd.ExcelWriter(tmp, engine="openpyxl") as w:
+            for sheet_name, df in sheets_dict.items():
+                df.to_excel(w, sheet_name=sheet_name, index=False)
+        os.replace(tmp, filename)
+        return filename, None
+    except PermissionError:
+        try: os.remove(tmp)
+        except: pass
+        alt = f"{os.path.splitext(filename)[0]}_{datetime.now().strftime('%Y%m%d%H%M%S')}_LOCKED.xlsx"
         try:
-            alt = f"{os.path.splitext(filename)[0]}_LOCKED_{datetime.now().strftime('%Y%m%d%H%M%S')}.xlsx"
             with pd.ExcelWriter(alt, engine="openpyxl") as w:
                 for sheet_name, df in sheets_dict.items():
-                    if not isinstance(df, pd.DataFrame):
-                        df = pd.DataFrame(df)
                     df.to_excel(w, sheet_name=sheet_name, index=False)
-            # clean tmp if exists
-            try:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
-            except:
-                pass
-            return None, os.path.abspath(alt)
-        except Exception as e_alt:
-            # give up: remove tmp and return failure
-            try:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
-            except:
-                pass
+            return None, alt
+        except Exception:
+            try: os.remove(alt)
+            except: pass
             return None, None
-
-    finally:
-        # ensure tmp removed if left
-        try:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-        except:
-            pass
+    except Exception:
+        try: os.remove(tmp)
+        except: pass
+        return None, None
         
+
+
+# ------------------ Modified read_sheet_safe ------------------
 def read_sheet_safe(sheet_name):
-    if not os.path.exists(EXCEL):
+    current_file = st.session_state.get("current_excel", EXCEL)
+    if not os.path.exists(current_file):
         return pd.DataFrame(columns=DATA_COLS if sheet_name != SHEET_SPECS else SPECS_COLS)
     try:
-        return pd.read_excel(EXCEL, sheet_name=sheet_name)
+        return pd.read_excel(current_file, sheet_name=sheet_name)
     except Exception:
         return pd.DataFrame(columns=DATA_COLS if sheet_name != SHEET_SPECS else SPECS_COLS)
+
 
 def build_specs_df():
     rows = []
@@ -331,29 +305,29 @@ def _status_from_value(part, hole, feat, val):
 from openpyxl import load_workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 
+# ------------------ Modified add_measurement_rows ------------------
 def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements, timestamp=None):
-    """
-    Streamlit Cloud safe save:
-    ✅ Always saves to a new timestamped file
-    ✅ Preserves formatting, borders, coloring, and reference images
-    """
     ensure_workbook()
+    ts = timestamp if timestamp else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    ts = timestamp if timestamp is not None else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # read current Excel file from session
+    current_file = st.session_state.get("current_excel", EXCEL)
 
-    # Read sheets from the latest master file
+    if not os.path.exists(current_file):
+        return False, f"Excel file not found: {current_file}"
+
     df_part = read_sheet_safe(SHEET_MB if part == "Mixing Block" else SHEET_GW)
     df_other = read_sheet_safe(SHEET_GW if part == "Mixing Block" else SHEET_MB)
     df_specs = read_sheet_safe(SHEET_SPECS)
 
-    # Build new rows
     rows = []
     for m in measurements:
         hole = str(m.get("Hole")).lstrip("H")
         feat = m.get("Feature")
-        try: val = float(m.get("Value"))
-        except: val = None
-
+        try:
+            val = float(m.get("Value"))
+        except:
+            val = None
         status, nominal, lsl, usl = _status_from_value(part, hole, feat, val if val is not None else 0.0)
         img_path = m.get("ImagePath", None)
 
@@ -384,30 +358,29 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
             df_append[c] = pd.to_numeric(df_append[c], errors="coerce")
 
     df_part = pd.concat([df_part, df_append], ignore_index=True)
-
     sheets = {
         SHEET_MB: df_part if part == "Mixing Block" else df_other,
         SHEET_GW: df_part if part == "Gas/Water Block" else df_other,
         SHEET_SPECS: df_specs
     }
 
-    # --- Always save to a unique timestamped file to avoid lock ---
-    timestamp_safe = datetime.now().strftime("%Y%m%d%H%M%S")
-    filename_to_save = f"/mount/src/sa-cvd-tracking/test6_{timestamp_safe}.xlsx"
+    saved_file, backup_file = atomic_write_all(EXCEL, sheets)
 
-    try:
-        with pd.ExcelWriter(filename_to_save, engine="openpyxl") as writer:
-            for sheet_name, df in sheets.items():
-                df.to_excel(writer, sheet_name=sheet_name, index=False)
+    # Use the actual saved file as current
+    if saved_file:
+        st.session_state["current_excel"] = saved_file
+        try: add_reference_image()
+        except: pass
+        try: apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
+        except: pass
+        return True, saved_file
 
-        # Reapply formatting and reference images
-        add_reference_image()
-        apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
-
-        return True, f"✅ Measurements saved safely: {filename_to_save}"
-
-    except Exception as e:
-        return False, f"❌ Failed to save measurements: {e}"
+    elif backup_file:
+        st.session_state["current_excel"] = backup_file
+        return False, f"Excel locked — backup saved to: {backup_file}"
+    else:
+        return False, "Failed to save"
+    return False, f"❌ Failed to save measurements: {e}"
 
 def get_available_holes_for_part(part):
     """Return hole list depending on part type."""

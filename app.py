@@ -448,7 +448,19 @@ with tabs[1]:
         st.markdown('<meta http-equiv="refresh" content="30">', unsafe_allow_html=True)
 
     part_trend = st.selectbox("Part Type", ["Mixing Block", "Gas/Water Block"], key="trend_part")
-    df_trend = show_trend_df(part_trend)
+    
+    # ---------------- FIX: Always re-read Excel for latest data ----------------
+    try:
+        df_trend = show_trend_df(part_trend)
+    except Exception as e:
+        st.error(f"Failed to load trend data: {e}")
+        df_trend = pd.DataFrame()
+
+    # Clear analysis cache if new measurements were just saved
+    if st.session_state.get("last_saved", None):
+        if "analysis_cache" in st.session_state:
+            st.session_state["analysis_cache"] = {}
+        st.session_state["last_saved"] = None  # Reset after clearing cache
 
     if df_trend is None or df_trend.empty:
         st.info("No measurement data available yet. Add measurements in Add Measurement tab.")
@@ -489,10 +501,9 @@ with tabs[1]:
             # ------------------ Trend Data Table ------------------
             st.markdown("### 📘 Trend Data Table")
             if len(selected_holes) == 1:
-                # Single hole → show spec coloring
                 single_hole = selected_holes[0]
                 df_single = df_plot_filtered[df_plot_filtered["Hole"] == single_hole]
-                    
+
                 def highlight_value_only(row):
                     try:
                         val = float(row["Value"])
@@ -520,7 +531,6 @@ with tabs[1]:
 
                     return colors
 
-
                 st.dataframe(
                     df_single[["Timestamp", "Machine", "Chamber", "Hole", "Feature", "Value", "LSL", "USL"]].style.apply(highlight_value_only, axis=1),
                     use_container_width=True
@@ -530,36 +540,28 @@ with tabs[1]:
             min_dt = df_plot_filtered["Timestamp"].min()
             max_dt = df_plot_filtered["Timestamp"].max()
 
-            # If no valid timestamps
             if pd.isna(min_dt) or pd.isna(max_dt):
                 st.warning("⚠ No valid date values found.")
                 df_plot_date = df_plot_filtered
             else:
                 min_date = min_dt.date()
                 max_date = max_dt.date()
-
-                # If only one day of data → no slider
                 if min_date == max_date:
                     st.info(f"Only one date found: **{min_date}**. No date filter applied.")
                     df_plot_date = df_plot_filtered
                 else:
-                    # Proper date input (no slider bug)
                     col_d1, col_d2 = st.columns(2)
-
                     with col_d1:
                         start_date = st.date_input("Start Date", value=min_date, min_value=min_date, max_value=max_date)
-
                     with col_d2:
                         end_date = st.date_input("End Date", value=max_date, min_value=min_date, max_value=max_date)
 
-                    # Prevent user error
                     if start_date > end_date:
                         st.error("❌ Start date cannot be after end date.")
                         df_plot_date = df_plot_filtered
                     else:
                         start_dt = pd.to_datetime(start_date)
                         end_dt = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-
                         df_plot_date = df_plot_filtered[
                             (df_plot_filtered["Timestamp"] >= start_dt) &
                             (df_plot_filtered["Timestamp"] <= end_dt)
@@ -568,74 +570,54 @@ with tabs[1]:
                 if df_plot_date.empty:
                     st.warning("⚠ No data in the selected date range.")
 
-                # ------------------ Professional Plotting ------------------
-                fig, ax = plt.subplots(figsize=(10, 4.5))  # slightly taller for readability
+            # ------------------ PLOTTING ------------------
+            fig, ax = plt.subplots(figsize=(10, 4.5))
+            ax.set_facecolor("#f5f5f5")
+            ax.grid(True, linestyle="--", linewidth=0.7, alpha=0.5)
 
-                # Background & grid
-                ax.set_facecolor("#f5f5f5")
-                ax.grid(True, linestyle="--", linewidth=0.7, alpha=0.5)
+            hole_colors_dict = {}
+            default_colors = ["#1F77B4", "#FF5733", "#33FF57", "#9B59B6",
+                              "#F1C40F", "#E67E22", "#1ABC9C", "#8E44AD"]
+            for i, hole in enumerate(selected_holes):
+                hole_colors_dict[hole] = default_colors[i % len(default_colors)]
 
-                # Colors per hole
-                hole_colors_dict = {}
-                default_colors = ["#1F77B4", "#FF5733", "#33FF57", "#9B59B6",
-                                  "#F1C40F", "#E67E22", "#1ABC9C", "#8E44AD"]
-                for i, hole in enumerate(selected_holes):
-                    hole_colors_dict[hole] = default_colors[i % len(default_colors)]
+            for i, hole in enumerate(selected_holes):
+                df_h = df_plot_date[df_plot_date["Hole"] == hole]
+                if df_h.empty:
+                    continue
 
-                # Plot each hole
-                for i, hole in enumerate(selected_holes):
-                    df_h = df_plot_date[df_plot_date["Hole"] == hole]
-                    if df_h.empty:
-                        continue
+                x_values = range(1, len(df_h)+1)
+                y_values = df_h["Value"].astype(float)
 
-                    x_values = range(1, len(df_h)+1)
-                    y_values = df_h["Value"].astype(float)
+                lsl_val = df_h["LSL"].dropna().iloc[0] if "LSL" in df_h.columns and not df_h["LSL"].dropna().empty else None
+                usl_val = df_h["USL"].dropna().iloc[0] if "USL" in df_h.columns and not df_h["USL"].dropna().empty else None
+                if lsl_val is not None and usl_val is not None:
+                    ax.fill_between(x_values, lsl_val, usl_val, color="#d4f4dd", alpha=0.3, label="Spec zone")
 
-                    # --- Spec zone shading ---
-                    lsl_val = df_h["LSL"].dropna().iloc[0] if "LSL" in df_h.columns and not df_h["LSL"].dropna().empty else None
-                    usl_val = df_h["USL"].dropna().iloc[0] if "USL" in df_h.columns and not df_h["USL"].dropna().empty else None
-                    if lsl_val is not None and usl_val is not None:
-                        ax.fill_between(x_values, lsl_val, usl_val, color="#d4f4dd", alpha=0.3, label="Spec zone")
+                color = hole_colors_dict[hole]
+                ax.plot(x_values, y_values, color=color, linewidth=2.2, label=f"{hole} Value")
+                ax.scatter(x_values, y_values, color=color, s=65, edgecolors="white", linewidth=0.7, zorder=3)
 
-                    # --- Plot values & markers ---
-                    ax.plot(x_values, y_values, color=hole_colors_dict[hole], linewidth=2.2, label=f"{hole} Value")
-                    ax.scatter(x_values, y_values, color=hole_colors_dict[hole], s=65, edgecolors="white", linewidth=0.7, zorder=3)
+                if len(x_values) >= 2:
+                    z = np.polyfit(list(x_values), y_values, 1)
+                    p = np.poly1d(z)
+                    ax.plot(x_values, p(x_values), linestyle="--", color=color, alpha=0.7, label=f"{hole} Trend")
 
-                    # --- Trend line (linear regression) ---
-                    if len(x_values) >= 2:
-                        z = np.polyfit(list(x_values), y_values, 1)
-                        p = np.poly1d(z)
-                        ax.plot(x_values, p(x_values), linestyle="--", color=hole_colors_dict[hole], alpha=0.7, label=f"{hole} Trend")
+                nominal_val = df_h["Nominal"].dropna().iloc[0] if "Nominal" in df_h.columns and not df_h["Nominal"].dropna().empty else None
+                if nominal_val is not None:
+                    ax.axhline(nominal_val, linestyle="--", color="yellow", linewidth=1.5, alpha=0.7)
+                if lsl_val is not None:
+                    ax.axhline(lsl_val, linestyle="--", color="red", linewidth=1.5, alpha=0.7)
+                if usl_val is not None:
+                    ax.axhline(usl_val, linestyle="--", color="green", linewidth=1.5, alpha=0.7)
 
-                    # --- Annotate last value ---
-                    ax.text(x_values[-1]+0.1, y_values.iloc[-1], f"{y_values.iloc[-1]:.2f}", 
-                            fontsize=9, fontweight="bold", color=hole_colors_dict[hole], va="bottom", ha="left")
-
-                    # --- Nominal/LSL/USL lines ---
-                    nominal_val = df_h["Nominal"].dropna().iloc[0] if "Nominal" in df_h.columns and not df_h["Nominal"].dropna().empty else None
-                    if nominal_val is not None:
-                        ax.axhline(nominal_val, linestyle="--", color="yellow", linewidth=1.5, alpha=0.7, label="Nominal")
-                    if lsl_val is not None:
-                        ax.axhline(lsl_val, linestyle="--", color="red", linewidth=1.5, alpha=0.7, label="LSL")
-                    if usl_val is not None:
-                        ax.axhline(usl_val, linestyle="--", color="green", linewidth=1.5, alpha=0.7, label="USL")
-
-                # Axes labels
-                ax.set_xlabel("Measurement Count", fontsize=10, color="#333333")
-                ax.set_ylabel("Measurement (mm)", fontsize=10, color="#333333")
-                ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.2f} mm"))
-                ax.tick_params(colors="#333333", labelsize=9)
-
-                # Title
-                mach_label = mch if mch != "All" else "All Machines"
-                ch_label = ch if ch != "All" else "All Chambers"
-                ax.set_title(f"Trend — {part_trend} ({feat})\n{mach_label}, {ch_label}", fontsize=13, color="#222222", fontweight="bold")
-
-                # Legend
-                ax.legend(fontsize=9, loc="upper left", framealpha=0.9)
-
-                plt.tight_layout()
-                st.pyplot(fig)
+            ax.set_xlabel("Measurement Count", fontsize=10, color="#333333")
+            ax.set_ylabel("Measurement (mm)", fontsize=10, color="#333333")
+            ax.tick_params(colors="#333333", labelsize=9)
+            ax.set_title(f"Trend — {part_trend}", fontsize=13, color="#222222", fontweight="bold")
+            ax.legend(fontsize=9, loc="upper left", framealpha=0.9)
+            plt.tight_layout()
+            st.pyplot(fig)
 
 
                 # --- Download ---
