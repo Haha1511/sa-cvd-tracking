@@ -223,11 +223,9 @@ if "reset_inputs" not in st.session_state:
 if "save_flash" not in st.session_state:
     st.session_state.save_flash = False
     
-
 # ------------------ TAB 0: Add Measurement ------------------
 with tabs[0]:
     st.subheader("Add Measurement")
-
     st.info("💡 Please make sure to close the Excel file before performing any actions.")
 
     # ---------------- SESSION STATE FOR AUTO-CLEAR ----------------
@@ -247,7 +245,6 @@ with tabs[0]:
     current_form_key = st.session_state.form_key
 
     with st.form(current_form_key):
-
         st.markdown('<div class="highlight-wrapper">', unsafe_allow_html=True)
         part = st.selectbox("Part Type", ["Mixing Block", "Gas/Water Block"])
         st.markdown('</div>', unsafe_allow_html=True)
@@ -280,25 +277,20 @@ with tabs[0]:
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("**Measurements (mm)** — leave empty to skip a field")
-
         holes = ["1", "2", "3", "4", "5"]
         cols_in = st.columns(3)
         inputs = []
         col_idx = 0
         for h in holes:
             with cols_in[col_idx]:
-
                 st.markdown('<div class="highlight-wrapper">', unsafe_allow_html=True)
                 st.markdown(f"**H{h}**")
-
                 for f in get_features_for_part(part, h):
                     key = f"meas_H{h}_{f}"
                     default_value = "" if st.session_state.clear_meas else st.session_state.get(key, "")
                     val = st.text_input(f"{f}", key=key, value=default_value)
                     inputs.append({"Hole": str(h), "Feature": f, "Value": val})
-
                 st.markdown('</div>', unsafe_allow_html=True)
-
             col_idx = (col_idx + 1) % 3
 
         # ======================================================
@@ -308,22 +300,9 @@ with tabs[0]:
         st.subheader("📸 Upload Photos for Specific Holes (Multiple Allowed)")
 
         idx = st.session_state.photo_counter
-
-        photo_hole = st.selectbox(
-            "Select Hole",
-            ["1", "2", "3", "4", "5"],
-            key=f"photo_hole_add_{idx}"
-        )
-        photo_feature = st.selectbox(
-            "Select Feature",
-            ["Inner", "Outer"],
-            key=f"photo_feature_add_{idx}"
-        )
-        uploaded_photo = st.file_uploader(
-            "Upload Photo (PNG/JPG)",
-            type=["png", "jpg", "jpeg"],
-            key=f"photo_upload_add_{idx}"
-        )
+        photo_hole = st.selectbox("Select Hole", ["1", "2", "3", "4", "5"], key=f"photo_hole_add_{idx}")
+        photo_feature = st.selectbox("Select Feature", ["Inner", "Outer"], key=f"photo_feature_add_{idx}")
+        uploaded_photo = st.file_uploader("Upload Photo (PNG/JPG)", type=["png", "jpg", "jpeg"], key=f"photo_upload_add_{idx}")
 
         # Add photo to pending list
         if uploaded_photo:
@@ -346,7 +325,7 @@ with tabs[0]:
                 st.write(f"{idx}. Hole: H{p['hole']} - {p['feature']}")
 
         # ================= Form submit button =================
-        submitted = st.form_submit_button("Save Measurements")
+        submitted = st.form_submit_button("💾 Save Measurements")
 
     # ---------------- AFTER FORM CREATION ----------------
     if st.session_state.get("clear_active", False):
@@ -381,54 +360,82 @@ with tabs[0]:
             # Assign the image path to all matching measurements
             for m in measurements:
                 if m["Hole"] == hole and m["Feature"].lower() == feature.lower():
-                    m["ImagePath"] = img_path
+                    m["Image Path"] = img_path
 
-        st.session_state.pending_photos_list = []  # clear after attaching
-        st.session_state.photo_counter = 0  # reset counter
+        # Reset pending photos
+        st.session_state.pending_photos_list = []
+        st.session_state.photo_counter = 0
 
+        # Validate required fields
         if not piece_id:
             st.error("Piece ID / Serial Number is required.")
         elif not measurements:
             st.info("No valid measurements entered; nothing saved.")
         else:
-            # ✅ Use the fixed add_measurement_rows that updates current_excel
-            ok, msg = add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements)
-            if ok:
+            # ---------------- SAVE TO EXCEL ----------------
+            try:
+                # Determine sheet
+                sheet_name_add = "Mixing Block Data" if part == "Mixing Block" else "Gas-Water Block Data"
+                # Read existing sheet
+                try:
+                    df_existing = pd.read_excel(EXCEL, sheet_name=sheet_name_add)
+                    df_existing = df_existing.loc[:, ~df_existing.columns.str.contains("^Unnamed")]
+                except Exception:
+                    df_existing = pd.DataFrame(columns=[
+                        "Machine", "Part Type", "Chamber", "Piece ID", "Hole",
+                        "Feature", "Value", "Nominal", "LSL", "USL",
+                        "Status", "PartFlow", "Notes", "Image Path"
+                    ])
+
+                # Append all measurements as rows
+                new_rows = []
+                for meas in measurements:
+                    row = {
+                        "Machine": machine,
+                        "Part Type": part,
+                        "Chamber": chamber,
+                        "Piece ID": piece_id,
+                        "Hole": meas["Hole"],
+                        "Feature": meas["Feature"],
+                        "Value": meas["Value"],
+                        "Nominal": pd.NA,
+                        "LSL": pd.NA,
+                        "USL": pd.NA,
+                        "Status": "PASS",
+                        "PartFlow": part_flow,
+                        "Notes": notes,
+                        "Image Path": meas.get("Image Path", "")
+                    }
+                    new_rows.append(row)
+
+                df_updated = pd.concat([df_existing, pd.DataFrame(new_rows)], ignore_index=True)
+
+                # Save to Excel
+                with pd.ExcelWriter(EXCEL, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
+                    df_updated.to_excel(writer, sheet_name=sheet_name_add, index=False)
+
+                # ✅ Success feedback
+                st.success(f"✅ Saved {len(new_rows)} measurements for Piece ID {piece_id}.")
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 st.session_state.clear_meas = True
                 st.session_state.clear_active = True
-
-                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                st.session_state["last_saved"] = now
-
                 st.session_state.form_key = f"form_add_{st.session_state.form_counter}"
                 st.session_state.form_counter += 1
+                st.session_state["pending_success"] = f"✅ Saved to Excel. ({len(new_rows)} measurements) — {now}"
 
-                # IMPORTANT: store success message
-                st.session_state["pending_success"] = f"✅ Saved to Excel. ({msg}) — {now}"
-
-                if "analysis_cache" in st.session_state:
-                    st.session_state["analysis_cache"].pop((part,), None)
-
-                # 🔹 Refresh to show new data in View & Manage tab
+                # Force refresh to show in View & Manage Data
                 st.rerun()
-            else:
-                st.error(f"❌ Failed to save: {msg}")
 
-        # ---------------- PROVIDE DOWNLOAD LINK ----------------
-        current_file = st.session_state.get("current_excel", EXCEL)
-        if os.path.exists(current_file):
-            with open(current_file, "rb") as f:
-                st.download_button(
-                    label="📥 Download Latest Excel",
-                    data=f,
-                    file_name=os.path.basename(current_file),
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+            except PermissionError:
+                st.error("❌ Excel file is open. Please close Excel first.")
+            except Exception as e:
+                st.error(f"❌ Failed to save measurements: {e}")
 
     # ---------------- SHOW SUCCESS MESSAGE AT BOTTOM ----------------
     if "pending_success" in st.session_state:
         st.success(st.session_state["pending_success"])
         del st.session_state["pending_success"]
+
 
 
 # ------------------ TAB 1: Trend Chart (with Analysis) ------------------
