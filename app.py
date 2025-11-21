@@ -633,7 +633,7 @@ with tabs[1]:
 
 
             # ------------------ Trend Analysis UI (Multi-hole with specs) ------------------
-                st.markdown(
+            st.markdown(
                     """
                     <style>
                     .status-green { color: #28a745; font-weight:700; }
