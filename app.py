@@ -410,7 +410,7 @@ with tabs[0]:
                     st.session_state["analysis_cache"].pop((part,), None)
 
                 # 🔹 Refresh to show new data in View & Manage tab
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.error(f"❌ Failed to save: {msg}")
 
