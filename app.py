@@ -391,31 +391,47 @@ with tabs[0]:
         elif not measurements:
             st.info("No valid measurements entered; nothing saved.")
         else:
-            ok, msg = add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements)
-            if ok:
-                st.session_state.clear_meas = True
-                st.session_state.clear_active = True
+            # ---------------- SAFE EXCEL SAVE ----------------
+            try:
+                ok, msg = add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements)
+                if ok:
+                    st.session_state.clear_meas = True
+                    st.session_state.clear_active = True
 
-                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                st.session_state["last_saved"] = now
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    st.session_state["last_saved"] = now
 
-                st.session_state.form_key = f"form_add_{st.session_state.form_counter}"
-                st.session_state.form_counter += 1
+                    st.session_state.form_key = f"form_add_{st.session_state.form_counter}"
+                    st.session_state.form_counter += 1
 
-                # IMPORTANT: only store message here (do NOT display it yet)
-                st.session_state["pending_success"] = f"✅ Saved to Excel. ({msg}) — {now}"
+                    # IMPORTANT: only store message here (do NOT display it yet)
+                    st.session_state["pending_success"] = f"✅ Saved to Excel. ({msg}) — {now}"
 
-                if "analysis_cache" in st.session_state:
-                    st.session_state["analysis_cache"].pop((part,), None)
+                    if "analysis_cache" in st.session_state:
+                        st.session_state["analysis_cache"].pop((part,), None)
 
-                st.rerun()
-            else:
-                st.error(f"❌ Failed to save ***PLEASE MAKE SURE CLOSED EXCEL FILE FIRST***: {msg}")
+                    st.rerun()
+
+                    # ---------------- ADD DOWNLOAD BUTTON FOR CLOUD ----------------
+                    if not os.name == "nt":  # Likely on Streamlit Cloud / Linux
+                        with open("test6.xlsx", "rb") as f:
+                            st.download_button(
+                                label="Download Excel File",
+                                data=f,
+                                file_name="test6.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+
+                else:
+                    st.error(f"❌ Failed to save ***PLEASE MAKE SURE CLOSED EXCEL FILE FIRST***: {msg}")
+            except Exception as e:
+                st.error(f"❌ Failed to save: {e}")
 
     # ---------------- SHOW SUCCESS MESSAGE AT BOTTOM ----------------
     if "pending_success" in st.session_state:
         st.success(st.session_state["pending_success"])
         del st.session_state["pending_success"]
+
 
 # ------------------ TAB 1: Trend Chart (with Analysis) ------------------
 with tabs[1]:
