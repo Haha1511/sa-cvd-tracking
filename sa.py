@@ -288,7 +288,22 @@ def _status_from_value(part, hole, feat, val):
     except Exception:
         return ("PASS" if val is not None else "FAIL", None, None, None)
 
-def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements, timestamp=None):
+def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements, timestamp=None, file_path=None):
+    """
+    Adds measurement rows to the Excel workbook.
+
+    Parameters:
+        part: str, "Mixing Block" or "Gas/Water Block"
+        machine: str
+        chamber: str
+        piece_id: str
+        part_flow: str, "IN" or "OUT"
+        notes: str
+        measurements: list of dicts, each with "Hole", "Feature", "Value", optionally "ImagePath"
+        timestamp: str, optional timestamp
+        file_path: str, optional path to save Excel file (default = EXCEL global)
+    """
+
     ensure_workbook()
     ts = timestamp if timestamp is not None else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     df_part = read_sheet_safe(SHEET_MB if part == "Mixing Block" else SHEET_GW)
@@ -306,7 +321,7 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
         status, nominal, lsl, usl = _status_from_value(part, hole, feat, val if val is not None else 0.0)
 
         # ⭐ Add image path if exists in measurement dict
-        img_path = m.get("ImagePath", None)  # should be full path string or None
+        img_path = m.get("ImagePath", None)  # full path string or None
 
         rows.append({
             "Timestamp": ts,
@@ -323,7 +338,7 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
             "USL": usl,
             "Status": status,
             "Notes": notes,
-            "Image Path": img_path  # store the image path in the row
+            "Image Path": img_path
         })
 
     if not rows:
@@ -342,7 +357,10 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
         SHEET_SPECS: df_specs
     }
 
-    saved, alt = atomic_write_all(EXCEL, sheets)
+    # Use custom file_path if provided
+    save_path = file_path if file_path else EXCEL
+
+    saved, alt = atomic_write_all(save_path, sheets)
     if saved:
         try:
             add_reference_image()  # existing helper, keep
@@ -352,11 +370,12 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
             apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
         except:
             pass
-        return True, saved
+        return True, save_path  # return actual saved path
     elif alt:
         return False, f"Excel locked — saved clone to: {alt}"
     else:
         return False, "Failed to save measurements"
+
 
     
 def get_available_holes_for_part(part):
