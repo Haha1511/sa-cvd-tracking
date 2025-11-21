@@ -632,7 +632,7 @@ with tabs[1]:
             )
 
 
-                # ------------------ Trend Analysis UI (Multi-hole with specs) ------------------
+            # ------------------ Trend Analysis UI (Multi-hole with specs) ------------------
                 st.markdown(
                     """
                     <style>
