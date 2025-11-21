@@ -391,26 +391,49 @@ with tabs[0]:
         elif not measurements:
             st.info("No valid measurements entered; nothing saved.")
         else:
-            ok, msg = add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements)
-            if ok:
-                st.session_state.clear_meas = True
-                st.session_state.clear_active = True
-
-                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                st.session_state["last_saved"] = now
-
-                st.session_state.form_key = f"form_add_{st.session_state.form_counter}"
-                st.session_state.form_counter += 1
-
-                # IMPORTANT: only store message here (do NOT display it yet)
-                st.session_state["pending_success"] = f"✅ Saved to Excel. ({msg}) — {now}"
-
-                if "analysis_cache" in st.session_state:
-                    st.session_state["analysis_cache"].pop((part,), None)
-
-                st.rerun()
+            # ---------------- SAVE MEASUREMENTS IN-MEMORY ----------------
+            if not piece_id:
+                st.error("Piece ID / Serial Number is required.")
+            elif not measurements:
+                st.info("No valid measurements entered; nothing saved.")
             else:
-                st.error(f"❌ Failed to save ***PLEASE MAKE SURE CLOSED EXCEL FILE FIRST***: {msg}")
+                try:
+                    # Create a new DataFrame to save
+                    df_to_save = pd.DataFrame(measurements)
+                    df_to_save["Part"] = part
+                    df_to_save["Machine"] = machine
+                    df_to_save["Chamber"] = chamber
+                    df_to_save["PieceID"] = piece_id
+                    df_to_save["PartFlow"] = part_flow
+                    df_to_save["Notes"] = notes
+                    df_to_save["Timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                    # Save to memory (no Excel file locked issues)
+                    excel_buffer = BytesIO()
+                    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+                        df_to_save.to_excel(writer, index=False, sheet_name="Measurements")
+                    excel_buffer.seek(0)
+
+                    # Download button
+                    st.download_button(
+                        label="📥 Download Excel File",
+                        data=excel_buffer,
+                        file_name=f"{piece_id}_measurements.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+
+                    st.session_state.clear_meas = True
+                    st.session_state.clear_active = True
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    st.session_state["pending_success"] = f"✅ Measurements ready to download — {now}"
+
+                    st.session_state.form_key = f"form_add_{st.session_state.form_counter}"
+                    st.session_state.form_counter += 1
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"❌ Failed to save measurements: {e}")
+
 
     # ---------------- SHOW SUCCESS MESSAGE AT BOTTOM ----------------
     if "pending_success" in st.session_state:
@@ -813,6 +836,8 @@ with tabs[1]:
     from openpyxl.drawing.image import Image as XLImage
     from openpyxl.styles import PatternFill
     from matplotlib.patches import Rectangle
+    import streamlit as st
+    import numpy as np
 
     TREND_EXCEL = "trendchart.xlsx"
 
@@ -916,10 +941,10 @@ with tabs[1]:
                                 if usl_val is not None:
                                     ax.axhline(usl_val, linestyle="--", color="green", linewidth=1.5, alpha=0.7)
 
-                                # --- Correct Spec Zone (full width) ---
+                                # Spec zone
                                 if lsl_val is not None and usl_val is not None and len(x_values) > 0:
-                                    rect_x0 = x_values[0] - 0.5       # start slightly before first measurement
-                                    rect_width = x_values[-1] - x_values[0] + 1.0  # cover full measurement range
+                                    rect_x0 = x_values[0] - 0.5
+                                    rect_width = x_values[-1] - x_values[0] + 1.0
                                     rect_y0 = lsl_val
                                     rect_height = usl_val - lsl_val
                                     rect = Rectangle(
@@ -928,7 +953,7 @@ with tabs[1]:
                                         rect_height,
                                         color="#d4f4dd",
                                         alpha=0.35,
-                                        zorder=1,   # behind the plot points
+                                        zorder=1,
                                         ec="none",
                                     )
                                     ax.add_patch(rect)
@@ -959,11 +984,24 @@ with tabs[1]:
 
                                 current_row += 5 + int(fig_height*4)
 
-                wb.save(TREND_EXCEL)
-                st.success("✅ Trend charts updated successfully in trendchart.xlsx!")
+                # Save workbook to buffer (no need to open Excel)
+                excel_buffer = BytesIO()
+                wb.save(excel_buffer)
+                excel_buffer.seek(0)
+
+                # Provide download button for all users
+                st.download_button(
+                    label="📥 Download Trend Charts (Excel)",
+                    data=excel_buffer,
+                    file_name="trendchart.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+                st.success("✅ Trend charts updated successfully!")
 
             except Exception as e:
-                st.error(f"Failed to update trend charts (PLEASE CLOSE EXCEL FIRST): {e}")
+                st.error(f"Failed to update trend charts: {e}")
+
 
 
     # ---------------- Open Trend Excel ----------------
