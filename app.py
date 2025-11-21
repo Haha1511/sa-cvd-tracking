@@ -632,141 +632,148 @@ with tabs[1]:
             )
 
 
-            # ------------------ Trend Analysis UI (Multi-hole with specs) ------------------
-            st.markdown(
-                    """
-                    <style>
-                    .status-green { color: #28a745; font-weight:700; }
-                    .status-green2 { color: #2ecc71; font-weight:700; }
-                    .status-yellow { color: #f1c40f; font-weight:700; }
-                    .status-red { color: #e74c3c; font-weight:700; }
-                    .analysis-box { background:#f2f2f2; padding:12px; border-radius:8px; margin-bottom:10px; color:#000000; }
-                    .analysis-title { font-weight:800; font-size:1.02rem; }
-                    .last-val-badge { font-weight:800; padding:4px 8px; border-radius:6px; color:#fff; }
-                    .last-val-green { background-color:#28a745; }
-                    .last-val-yellow { background-color:#f1c40f; color:#000; }
-                    .last-val-red { background-color:#e74c3c; }
-                    </style>
-                    """,
-                    unsafe_allow_html=True,
+    # ------------------ Trend Analysis UI (Multi-hole with specs) ------------------
+    st.markdown(
+        """
+        <style>
+        .status-green { color: #28a745; font-weight:700; }
+        .status-green2 { color: #2ecc71; font-weight:700; }
+        .status-yellow { color: #f1c40f; font-weight:700; }
+        .status-red { color: #e74c3c; font-weight:700; }
+        .analysis-box { background:#f2f2f2; padding:12px; border-radius:8px; margin-bottom:10px; color:#000000; }
+        .analysis-title { font-weight:800; font-size:1.02rem; }
+        .last-val-badge { font-weight:800; padding:4px 8px; border-radius:6px; color:#fff; }
+        .last-val-green { background-color:#28a745; }
+        .last-val-yellow { background-color:#f1c40f; color:#000; }
+        .last-val-red { background-color:#e74c3c; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col_an1, col_an2 = st.columns([3, 1])
+    with col_an1:
+        st.write("Click **Analyze Trend** to compute linear trend (slope), R², Δ, last value, and spec info per hole.")
+    with col_an2:
+        analyze_btn = st.button("Analyze Trend", key=f"analyze_{part_trend}_{feat}")
+
+    # Initialize cache
+    if "analysis_cache" not in st.session_state:
+        st.session_state["analysis_cache"] = {}
+
+    def compute_trend_analysis(df_in):
+        result = {
+            "slope": 0.0, "r2": 0.0, "delta": 0.0,
+            "trend_status": ("Stable", "status-green"),
+            "prox_status": None, "nominal": None,
+            "lsl": None, "usl": None, "last_val": None,
+        }
+
+        if df_in is None or df_in.empty:
+            return result
+
+        df = df_in.sort_values("Timestamp").copy()
+        y = pd.to_numeric(df["Value"], errors="coerce").fillna(0).astype(float).values
+        if len(y) == 0: 
+            return result
+
+        x = (df["Timestamp"] - df["Timestamp"].min()).dt.total_seconds() / 86400.0
+        if len(x) >= 2 and not np.allclose(y, y[0]):
+            p = np.polyfit(x, y, 1)
+            slope, intercept = float(p[0]), float(p[1])
+            yhat = np.polyval(p, x)
+            denom = np.sum((y - np.mean(y)) ** 2)
+            r2 = 1 - np.sum((y - yhat) ** 2) / denom if denom != 0 else 1.0
+        else:
+            slope = 0.0
+            intercept = float(y[0])
+            r2 = 0.0
+
+        delta = float(y[-1] - y[0])
+        abs_slope = abs(slope)
+        if abs_slope < 0.01:
+            trend_status = ("Stable", "status-green")
+        elif abs_slope < 0.1:
+            trend_status = ("Drifting", "status-yellow")
+        else:
+            trend_status = ("Rapid change", "status-red")
+
+        # Nominal/LSL/USL
+        nominal = df["Nominal"].dropna().iloc[0] if "Nominal" in df.columns and not df["Nominal"].dropna().empty else None
+        lsl = df["LSL"].dropna().iloc[0] if "LSL" in df.columns and not df["LSL"].dropna().empty else None
+        usl = df["USL"].dropna().iloc[0] if "USL" in df.columns and not df["USL"].dropna().empty else None
+        last_val = float(y[-1])
+
+        prox_status = None
+        if lsl is not None and usl is not None:
+            if last_val < lsl or last_val > usl:
+                prox_status = ("Out of spec", "status-red", f"Last value {last_val:.4f} outside spec [{lsl}, {usl}]")
+            else:
+                span = usl - lsl if (usl - lsl) != 0 else 1.0
+                dist_to_nearest = min(abs(last_val - lsl), abs(usl - last_val))
+                proximity = dist_to_nearest / span
+                if proximity < 0.10:
+                    prox_status = ("Near limit", "status-yellow", f"Last value {last_val:.4f} within 10% of limit")
+                else:
+                    prox_status = ("Within spec", "status-green2", f"Last value {last_val:.4f} comfortably within spec")
+
+        return {
+            "slope": slope, "r2": r2, "delta": delta,
+            "trend_status": trend_status, "prox_status": prox_status,
+            "nominal": nominal, "lsl": lsl, "usl": usl,
+            "last_val": last_val,
+        }
+
+    # Loop through selected holes
+    for hole in selected_holes:
+        df_hole = df_plot_date[df_plot_date["Hole"] == hole]
+        cache_key = (part_trend, hole, feat)
+        result = None
+
+        if analyze_btn:
+            try:
+                result = compute_trend_analysis(df_hole)
+                st.session_state["analysis_cache"][cache_key] = result
+            except Exception as e:
+                st.error(f"Analysis failed for {hole}: {e}")
+                result = None
+        elif cache_key in st.session_state["analysis_cache"]:
+            result = st.session_state["analysis_cache"][cache_key]
+
+        if result:
+            trend_label, trend_css = result["trend_status"]
+            prox = result.get("prox_status")
+            summary_css = prox[1] if prox else trend_css
+            last_val = result.get("last_val")
+            last_badge_class = "last-val-green"
+            if prox:
+                if prox[1] == "status-red": last_badge_class = "last-val-red"
+                elif prox[1] == "status-yellow": last_badge_class = "last-val-yellow"
+
+            summary_html = (
+                f"<div class='analysis-box'>"
+                f"<div class='analysis-title'>"
+                f"<span class='{summary_css}'>"
+                f"<b>{hole}</b> — trend: <b>{trend_label.lower()}</b>, slope = <code>{result['slope']:.4f}</code> mm/day, R² = <code>{result['r2']:.3f}</code>, Δ = <code>{result['delta']:.4f}</code>."
+                f"</span></div>"
+                f"<div style='margin-top:4px;'>"
+                f"<b>Nominal:</b> {result.get('nominal','N/A')} &nbsp;&nbsp; "
+                f"<b>LSL:</b> {result.get('lsl','N/A')} &nbsp;&nbsp; "
+                f"<b>USL:</b> {result.get('usl','N/A')}"
+                f"</div>"
+                f"<span class='last-val-badge {last_badge_class}'>Last: {last_val:.4f}</span>"
+            )
+
+            if prox:
+                summary_html += (
+                    f"<div style='margin-top:4px;'>"
+                    f"<b>Spec Check:</b> <span class='{prox[1]}'>{prox[0]}</span><br>"
+                    f"<i>{prox[2]}</i></div>"
                 )
 
-                col_an1, col_an2 = st.columns([3, 1])
-                with col_an1:
-                    st.write("Click **Analyze Trend** to compute linear trend (slope), R², Δ, last value, and spec info per hole.")
-                with col_an2:
-                    analyze_btn = st.button("Analyze Trend", key=f"analyze_{part_trend}_{feat}")
+            summary_html += "</div>"
+            st.markdown(summary_html, unsafe_allow_html=True)
 
-                # Initialize cache
-                if "analysis_cache" not in st.session_state:
-                    st.session_state["analysis_cache"] = {}
-
-                def compute_trend_analysis(df_in):
-                    result = {
-                        "slope": 0.0, "r2": 0.0, "delta": 0.0,
-                        "trend_status": ("Stable", "status-green"),
-                        "prox_status": None, "nominal": None,
-                        "lsl": None, "usl": None, "last_val": None,
-                    }
-
-                    if df_in is None or df_in.empty:
-                        return result
-
-                    df = df_in.sort_values("Timestamp").copy()
-                    y = pd.to_numeric(df["Value"], errors="coerce").fillna(0).astype(float).values
-                    if len(y) == 0: return result
-
-                    x = (df["Timestamp"] - df["Timestamp"].min()).dt.total_seconds() / 86400.0
-                    if len(x) >= 2 and not np.allclose(y, y[0]):
-                        p = np.polyfit(x, y, 1)
-                        slope, intercept = float(p[0]), float(p[1])
-                        yhat = np.polyval(p, x)
-                        denom = np.sum((y - np.mean(y)) ** 2)
-                        r2 = 1 - np.sum((y - yhat) ** 2) / denom if denom != 0 else 1.0
-                    else:
-                        slope = 0.0; intercept = float(y[0]); r2 = 0.0
-
-                    delta = float(y[-1] - y[0])
-                    abs_slope = abs(slope)
-                    if abs_slope < 0.01: trend_status = ("Stable", "status-green")
-                    elif abs_slope < 0.1: trend_status = ("Drifting", "status-yellow")
-                    else: trend_status = ("Rapid change", "status-red")
-
-                    # Nominal/LSL/USL
-                    nominal = df["Nominal"].dropna().iloc[0] if "Nominal" in df.columns and not df["Nominal"].dropna().empty else None
-                    lsl = df["LSL"].dropna().iloc[0] if "LSL" in df.columns and not df["LSL"].dropna().empty else None
-                    usl = df["USL"].dropna().iloc[0] if "USL" in df.columns and not df["USL"].dropna().empty else None
-                    last_val = float(y[-1])
-
-                    prox_status = None
-                    if lsl is not None and usl is not None:
-                        if last_val < lsl or last_val > usl:
-                            prox_status = ("Out of spec", "status-red", f"Last value {last_val:.4f} outside spec [{lsl}, {usl}]")
-                        else:
-                            span = usl - lsl if (usl - lsl) != 0 else 1.0
-                            dist_to_nearest = min(abs(last_val - lsl), abs(usl - last_val))
-                            proximity = dist_to_nearest / span
-                            if proximity < 0.10:
-                                prox_status = ("Near limit", "status-yellow", f"Last value {last_val:.4f} within 10% of limit")
-                            else:
-                                prox_status = ("Within spec", "status-green2", f"Last value {last_val:.4f} comfortably within spec")
-
-                    return {
-                        "slope": slope, "r2": r2, "delta": delta,
-                        "trend_status": trend_status, "prox_status": prox_status,
-                        "nominal": nominal, "lsl": lsl, "usl": usl,
-                        "last_val": last_val,
-                    }
-
-                # Loop through selected holes
-                for hole in selected_holes:
-                    df_hole = df_plot_date[df_plot_date["Hole"] == hole]
-                    cache_key = (part_trend, hole, feat)
-                    result = None
-
-                    if analyze_btn:
-                        try:
-                            result = compute_trend_analysis(df_hole)
-                            st.session_state["analysis_cache"][cache_key] = result
-                        except Exception as e:
-                            st.error(f"Analysis failed for {hole}: {e}")
-                            result = None
-                    elif cache_key in st.session_state["analysis_cache"]:
-                        result = st.session_state["analysis_cache"][cache_key]
-
-                    if result:
-                        trend_label, trend_css = result["trend_status"]
-                        prox = result.get("prox_status")
-                        summary_css = prox[1] if prox else trend_css
-                        last_val = result.get("last_val")
-                        last_badge_class = "last-val-green"
-                        if prox:
-                            if prox[1] == "status-red": last_badge_class = "last-val-red"
-                            elif prox[1] == "status-yellow": last_badge_class = "last-val-yellow"
-
-                        summary_html = (
-                            f"<div class='analysis-box'>"
-                            f"<div class='analysis-title'>"
-                            f"<span class='{summary_css}'>"
-                            f"<b>{hole}</b> — trend: <b>{trend_label.lower()}</b>, slope = <code>{result['slope']:.4f}</code> mm/day, R² = <code>{result['r2']:.3f}</code>, Δ = <code>{result['delta']:.4f}</code>."
-                            f"</span></div>"
-                            f"<div style='margin-top:4px;'>"
-                            f"<b>Nominal:</b> {result.get('nominal','N/A')} &nbsp;&nbsp; "
-                            f"<b>LSL:</b> {result.get('lsl','N/A')} &nbsp;&nbsp; "
-                            f"<b>USL:</b> {result.get('usl','N/A')}"
-                            f"</div>"
-                            f"<span class='last-val-badge {last_badge_class}'>Last: {last_val:.4f}</span>"
-                        )
-
-                        if prox:
-                            summary_html += (
-                                f"<div style='margin-top:4px;'>"
-                                f"<b>Spec Check:</b> <span class='{prox[1]}'>{prox[0]}</span><br>"
-                                f"<i>{prox[2]}</i></div>"
-                            )
-
-                        summary_html += "</div>"
-                        st.markdown(summary_html, unsafe_allow_html=True)
 
 
 
