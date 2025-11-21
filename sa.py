@@ -293,13 +293,14 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 
 def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements, timestamp=None):
     ts = timestamp if timestamp else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    if not os.path.exists(EXISTING_EXCEL):
-        return False, f"Excel file not found: {EXISTING_EXCEL}"
-    
-    # Load the workbook as-is to preserve formatting
-    wb = load_workbook(EXISTING_EXCEL)
-    
+
+    # ✔ Use your original EXCEL file variable
+    if not os.path.exists(EXCEL):
+        return False, f"Excel file not found: {EXCEL}"
+
+    # Load workbook (preserves formatting)
+    wb = load_workbook(EXCEL)
+
     # Select the sheet
     sheet_name = "Mixing Block Data" if part == "Mixing Block" else "Gas/Water Block"
     if sheet_name not in wb.sheetnames:
