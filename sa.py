@@ -333,49 +333,28 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 
 def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements, timestamp=None):
     """
-    Same external behaviour as before (returns (True, saved_path) or (False, message)),
-    but implements more robust saving and clearer failure messages.
+    Safe version of add_measurement_rows:
+    ✅ Always saves to a timestamped Excel file to avoid lock issues
+    ✅ Preserves formatting, borders, and reference images
+    ✅ Keeps your original DATA_COLS + Image Path
     """
     ensure_workbook()
 
     ts = timestamp if timestamp is not None else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # basic sanity
-    if not isinstance(measurements, (list, tuple)) or len(measurements) == 0:
-        return False, "No measurements provided"
+    # Read existing sheets
+    df_part = read_sheet_safe(SHEET_MB if part == "Mixing Block" else SHEET_GW)
+    df_other = read_sheet_safe(SHEET_GW if part == "Mixing Block" else SHEET_MB)
+    df_specs = read_sheet_safe(SHEET_SPECS)
 
-    # ensure workbook file exists or create base workbook first
-    if not os.path.exists(EXCEL):
-        # try to create baseline workbook
-        try:
-            sheets = {
-                SHEET_MB: pd.DataFrame(columns=DATA_COLS),
-                SHEET_GW: pd.DataFrame(columns=DATA_COLS),
-                SHEET_SPECS: build_specs_df(),
-                SHEET_GW_REF: pd.DataFrame(["Image Loads Below"])
-            }
-            saved_init, alt_init = atomic_write_all(EXCEL, sheets)
-            if not saved_init and not alt_init:
-                return False, "Could not create base Excel workbook (permission or disk error)"
-        except Exception as e:
-            return False, f"Could not create base Excel workbook: {e}"
-
-    # read existing sheets (defensive)
-    try:
-        df_part = read_sheet_safe(SHEET_MB if part == "Mixing Block" else SHEET_GW)
-        df_other = read_sheet_safe(SHEET_GW if part == "Mixing Block" else SHEET_MB)
-        df_specs = read_sheet_safe(SHEET_SPECS)
-    except Exception as e:
-        return False, f"Failed to read existing Excel sheets: {e}"
-
+    # Build new rows
     rows = []
     for m in measurements:
         hole = str(m.get("Hole")).lstrip("H")
         feat = m.get("Feature")
-
         try:
             val = float(m.get("Value"))
-        except Exception:
+        except:
             val = None
 
         status, nominal, lsl, usl = _status_from_value(
@@ -406,17 +385,11 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
         return False, "No rows to add"
 
     df_append = pd.DataFrame(rows, columns=DATA_COLS + ["Image Path"])
-
-    # numeric conversions
     for c in ["Value", "Nominal", "LSL", "USL"]:
         if c in df_append.columns:
             df_append[c] = pd.to_numeric(df_append[c], errors="coerce")
 
-    # append to target sheet dataframe
-    try:
-        df_part = pd.concat([df_part, df_append], ignore_index=True)
-    except Exception as e:
-        return False, f"Failed to combine dataframes before saving: {e}"
+    df_part = pd.concat([df_part, df_append], ignore_index=True)
 
     sheets = {
         SHEET_MB: df_part if part == "Mixing Block" else df_other,
@@ -424,45 +397,26 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
         SHEET_SPECS: df_specs
     }
 
-    # attempt atomic save
-    saved, alt = atomic_write_all(EXCEL, sheets)
+    # --- Always save to a timestamped file to avoid Excel locks ---
+    timestamp_safe = datetime.now().strftime("%Y%m%d%H%M%S")
+    filename_to_save = f"test6_{timestamp_safe}.xlsx"
+    saved, alt = atomic_write_all(filename_to_save, sheets)
 
-    # interpret results with clear messages
     if saved:
-        # post-save formatting (best-effort)
         try:
             add_reference_image()
-        except Exception:
-            # swallow but record not to break save
+        except:
             pass
         try:
             apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
-        except Exception:
+        except:
             pass
-        return True, os.path.abspath(saved)
+        return True, f"✅ Measurements saved to {filename_to_save}"
+    elif alt:
+        return False, f"Excel locked — backup saved to: {alt}"
+    else:
+        return False, "Failed to save measurements"
 
-    if alt:
-        # Excel file locked — but we saved an alternate copy
-        try:
-            # still attempt formatting on the alt file (best-effort)
-            # load alt workbook and attempt to apply coloring if possible
-            try:
-                wb_alt = load_workbook(alt)
-                wb_alt.close()
-            except Exception:
-                pass
-        except Exception:
-            pass
-        return False, f"Excel file locked — a copy was saved to: {alt}"
-
-    # final fallback: attempt to write a minimal CSV backup to avoid full failure
-    try:
-        fallback_csv = f"{os.path.splitext(EXCEL)[0]}_BACKUP_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
-        df_part.to_csv(fallback_csv, index=False)
-        return False, f"Failed to save Excel workbook, but data written to CSV backup: {fallback_csv}"
-    except Exception:
-        return False, "Failed to save (unknown error). Please check file permissions and disk space."
-    
 def get_available_holes_for_part(part):
     """Return hole list depending on part type."""
     if part.lower() == "mixing block":
