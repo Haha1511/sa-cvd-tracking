@@ -620,16 +620,16 @@ with tabs[1]:
             st.pyplot(fig)
 
 
-                # --- Download ---
-                buf = BytesIO()
-                fig.savefig(buf, format="png", dpi=300, bbox_inches="tight")
+            # --- Download ---
+            buf = BytesIO()
+            fig.savefig(buf, format="png", dpi=300, bbox_inches="tight")
 
-                st.download_button(
-                    "📥 Download Trend Chart",
-                    buf.getvalue(),
-                    file_name=f"Trend_{feat}.png",
-                    mime="image/png",
-                )
+            st.download_button(
+            "📥 Download Trend Chart",
+                buf.getvalue(),
+                file_name=f"Trend_{feat}.png",
+                mime="image/png",
+            )
 
 
                 # ------------------ Trend Analysis UI (Multi-hole with specs) ------------------
