@@ -1036,12 +1036,17 @@ with tabs[2]:
             cols.insert(idx + 1, "Part In/Out")
             df_view = df_view[cols]
 
+        # --- Store session state for auto-update of trend chart
+        if "df_data" not in st.session_state:
+            st.session_state.df_data = df_view.copy()
+
     except PermissionError:
         st.error("❌ Excel file is currently open. Please **close the Excel file first** and refresh the page.")
         st.stop()
     except Exception as e:
         st.error(f"⚠️ Failed to load data: {e}")
         df_view = pd.DataFrame(columns=DATA_COLS)
+        st.session_state.df_data = df_view.copy()
 
     import urllib.parse
     import base64
@@ -1146,121 +1151,10 @@ with tabs[2]:
         html += "</tbody></table>"
         st.markdown(html, unsafe_allow_html=True)
 
-    # ===================== DELETE ROWS =====================
-    st.markdown("### 🗑️ Delete Rows")
-    st.info("Enter row numbers exactly as shown in the table (1-based). Example: `1,2` or `3-5,7`")
-    delete_input = st.text_input("Rows to delete (e.g. 1,2 or 1-5,7)", key="delete_input_view")
-
-    if st.button("Delete Selected"):
-        raw = str(delete_input).strip()
-        if not raw:
-            st.warning("Enter rows or ranges to delete.")
-        else:
-            try:
-                # --- Parse user input for 1-based deletion ---
-                rows_to_delete = []
-                parts = [r.strip() for r in raw.split(",") if r.strip()]
-                for p in parts:
-                    if "-" in p:
-                        start, end = p.split("-")
-                        rows_to_delete.extend(range(int(start), int(end) + 1))
-                    else:
-                        rows_to_delete.append(int(p))
-
-                rows_to_delete = sorted(set(rows_to_delete))
-                rows_to_delete_zero_based = [r - 1 for r in rows_to_delete if 1 <= r <= len(df_view)]
-
-                if not rows_to_delete_zero_based:
-                    st.warning("⚠️ No valid rows to delete.")
-                else:
-                    df_upd = df_view.drop(df_view.index[rows_to_delete_zero_based]).reset_index(drop=True)
-
-                    # Remove unnamed columns (Excel artifacts)
-                    df_upd = df_upd.loc[:, ~df_upd.columns.str.contains("^Unnamed", case=False)]
-
-                    try:
-                        with pd.ExcelWriter(EXCEL, mode="a", engine="openpyxl", if_sheet_exists="replace") as writer:
-                            df_upd.to_excel(writer, sheet_name=sheet_name, index=False)
-
-                        # ✅ Show success before rerun
-                        st.success(f"✅ Deleted rows: {rows_to_delete}")
-                        st.toast(f"Rows {rows_to_delete} deleted successfully 🗑️", icon="🗑️")
-
-                        import time
-                        time.sleep(1.5)
-                        st.rerun()
-
-                    except PermissionError:
-                        st.error("❌ Excel file is open. Please **close Excel first** and try again.")
-                    except Exception as e:
-                        st.error(f"❌ Failed to save changes: {e}")
-
-            except Exception as e:
-                st.error(f"❌ Failed to delete rows: {e}")
-
-    # ===================== DELETE IMAGE FOR SPECIFIC ROW =====================
-    st.markdown("### 🖼️ Delete Image for Selected Hole")
-    st.info("Enter row numbers exactly as shown in the table (1-based). Example: `1,2` or `3-5,7`")
-
-    # Input for rows or ranges to delete images
-    delete_image_input = st.text_input("Rows to delete image for the selected hole (e.g. 1,2 or 1-5,7)", key="delete_image_input_view")
-
-    if st.button("Delete Image for Selected Holes"):
-        raw = str(delete_image_input).strip()
-        if not raw:
-            st.warning("Enter rows or ranges to delete the images.")
-        else:
-            try:
-                # --- Parse user input for 1-based image deletion ---
-                rows_to_delete_image = []
-                parts = [r.strip() for r in raw.split(",") if r.strip()]
-                for p in parts:
-                    if "-" in p:
-                        start, end = p.split("-")
-                        rows_to_delete_image.extend(range(int(start), int(end) + 1))
-                    else:
-                        rows_to_delete_image.append(int(p))
-
-                rows_to_delete_image = sorted(set(rows_to_delete_image))
-                rows_to_delete_image_zero_based = [r - 1 for r in rows_to_delete_image if 1 <= r <= len(df_view)]
-
-                if not rows_to_delete_image_zero_based:
-                    st.warning("⚠️ No valid rows to delete image for.")
-                else:
-                    for row_to_delete_image in rows_to_delete_image_zero_based:
-                        image_path = df_view.loc[row_to_delete_image, 'Image Path']  # Get the image path of the selected row
-                        if image_path and os.path.exists(image_path):
-                            try:
-                                os.remove(image_path)  # Delete the image file
-                                # Update the DataFrame to remove the image path
-                                df_upd = df_view.copy()
-                                df_upd.at[row_to_delete_image, 'Image Path'] = None  # Remove the image path
-
-                                # Save the updated DataFrame back to Excel
-                                with pd.ExcelWriter(EXCEL, mode="a", engine="openpyxl", if_sheet_exists="replace") as writer:
-                                    df_upd.to_excel(writer, sheet_name=sheet_name, index=False)
-
-                                st.success(f"✅ Image for Hole {df_view.loc[row_to_delete_image, 'Hole']} deleted successfully.")
-                                st.toast(f"Image for Hole {df_view.loc[row_to_delete_image, 'Hole']} deleted successfully 🖼️", icon="🖼️")
-                            except Exception as e:
-                                st.error(f"❌ Failed to delete image for Hole {df_view.loc[row_to_delete_image, 'Hole']}: {e}")
-                        else:
-                            st.warning(f"⚠️ No image found for Hole {df_view.loc[row_to_delete_image, 'Hole']} at {image_path}.")
-                    
-                    import time
-                    time.sleep(1.5)  # short pause to let message show
-                    st.rerun()
-
-            except Exception as e:
-                st.error(f"❌ Failed to delete images: {e}")
-
-
     # ===================== EDIT MEASUREMENT DATA =====================
     st.markdown("### ✏️ Edit Measurement Data (Excel-style 1-based Index)")
 
-    if df_view.empty:
-        st.info("No data to edit.")
-    else:
+    if not df_view.empty:
         total_rows = len(df_view)
         st.info(f"Enter the **row number** as shown in the table (1 to {total_rows}).")
 
@@ -1276,21 +1170,11 @@ with tabs[2]:
         selected_row = df_view.iloc[edit_row]
         st.markdown(f"**Editing Row {edit_row_display}** — Piece ID: `{selected_row.get('Piece ID', 'N/A')}`")
 
-        # ---------- EDITABLE COLUMNS ----------
         editable_cols = [
             "Machine", "Part Type", "Chamber", "Piece ID",
             "Hole", "Feature", "Value", "Nominal", "LSL", "USL", "Status", "PartFlow", "Notes", "Image Path"
         ]
         editable_cols = [c for c in editable_cols if c in df_view.columns]
-
-        # Drop the extra `ImagePath` column if it exists
-        if 'ImagePath' in df_view.columns:
-            df_view.drop(columns=['ImagePath'], inplace=True)
-
-        # Rename `ImagePath` to `Image Path` (if necessary)
-        if 'Image Path' not in df_view.columns:
-            if 'ImagePath' in df_view.columns:
-                df_view.rename(columns={'ImagePath': 'Image Path'}, inplace=True)
 
         with st.form("form_edit_row_excel_like"):
             new_entries = {}
@@ -1315,18 +1199,12 @@ with tabs[2]:
             hole_image = st.file_uploader(f"Upload Image for Hole {hole_type}", type=["png", "jpg", "jpeg"], key=f"hole_{hole_type}")
 
             if hole_image:
-                # Use the Feature (Inner/Outer) from the row automatically
-                feature_type = selected_row.get("Feature", "Unknown")  # Use the 'Feature' column (Inner/Outer)
+                feature_type = selected_row.get("Feature", "Unknown")
                 image_filename = f"{selected_row['Hole']}_{feature_type}.jpg"
                 image_path = os.path.join("uploaded_images", image_filename)
-
-                # Save the uploaded image under the Inner/Outer folder based on Feature
                 with open(image_path, "wb") as img_file:
                     img_file.write(hole_image.getbuffer())
-
-                new_entries["Image Path"] = image_path  # Store the image path automatically
-
-                # Create clickable image (expandable) — without the "Click to view the image" label
+                new_entries["Image Path"] = image_path
                 st.markdown(
                     f'<a href="file:///{os.path.abspath(image_path)}" target="_blank">'
                     f'<img src="file:///{os.path.abspath(image_path)}" width="400" style="border-radius: 10px; cursor: pointer;" /></a>',
@@ -1350,10 +1228,9 @@ with tabs[2]:
                 else:
                     df_upd.at[edit_row, col] = txt_str
 
-            # 🔹 Save Part In/Out selection
             df_upd.at[edit_row, "Part In/Out"] = edit_part_inout
 
-            # 🔹 Keep column order same: Piece ID → Part In/Out → rest
+            # Keep column order same: Piece ID → Part In/Out → rest
             if "Piece ID" in df_upd.columns and "Part In/Out" in df_upd.columns:
                 cols = list(df_upd.columns)
                 cols.remove("Part In/Out")
@@ -1361,24 +1238,26 @@ with tabs[2]:
                 cols.insert(idx + 1, "Part In/Out")
                 df_upd = df_upd[cols]
 
-            df_upd = df_upd.loc[:, ~df_upd.columns.str.contains("^Unnamed", case=False)]  # clean unnamed again
+            df_upd = df_upd.loc[:, ~df_upd.columns.str.contains("^Unnamed", case=False)]
 
             try:
+                # Save to Excel
                 with pd.ExcelWriter(EXCEL, mode="a", engine="openpyxl", if_sheet_exists="replace") as writer:
                     df_upd.to_excel(writer, sheet_name=sheet_name, index=False)
 
-                # ✅ Show message before rerun
+                # ✅ Update session_state so trend chart sees latest data
+                st.session_state.df_data = df_upd.copy()
+
                 st.success(f"✅ Row {edit_row_display} updated successfully in Excel and table.")
                 st.toast(f"Row {edit_row_display} updated successfully ✅", icon="✅")
                 import time
-                time.sleep(1.5)  # short pause to let message show
+                time.sleep(1.5)
                 st.rerun()
 
             except PermissionError:
                 st.error("❌ Excel file is open. Please **close Excel first** and try again.")
             except Exception as e:
                 st.error(f"❌ Failed to save changes: {e}")
-
 
                 
 # ------------------ TAB 3: View Spec ------------------
