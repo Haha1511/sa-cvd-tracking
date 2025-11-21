@@ -288,29 +288,26 @@ def _status_from_value(part, hole, feat, val):
     except Exception:
         return ("PASS" if val is not None else "FAIL", None, None, None)
 
-def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements, timestamp=None, file_path=None):
-    """
-    Adds measurement rows to the Excel workbook.
+from openpyxl import load_workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
 
-    Parameters:
-        part: str, "Mixing Block" or "Gas/Water Block"
-        machine: str
-        chamber: str
-        piece_id: str
-        part_flow: str, "IN" or "OUT"
-        notes: str
-        measurements: list of dicts, each with "Hole", "Feature", "Value", optionally "ImagePath"
-        timestamp: str, optional timestamp
-        file_path: str, optional path to save Excel file (default = EXCEL global)
-    """
-
-    ensure_workbook()
-    ts = timestamp if timestamp is not None else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    df_part = read_sheet_safe(SHEET_MB if part == "Mixing Block" else SHEET_GW)
-    df_other = read_sheet_safe(SHEET_GW if part == "Mixing Block" else SHEET_MB)
-    df_specs = read_sheet_safe(SHEET_SPECS)
-
-    rows = []
+def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements, timestamp=None):
+    ts = timestamp if timestamp else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    if not os.path.exists(EXISTING_EXCEL):
+        return False, f"Excel file not found: {EXISTING_EXCEL}"
+    
+    # Load the workbook as-is to preserve formatting
+    wb = load_workbook(EXISTING_EXCEL)
+    
+    # Select the sheet
+    sheet_name = "Mixing Block Data" if part == "Mixing Block" else "Gas/Water Block"
+    if sheet_name not in wb.sheetnames:
+        return False, f"Sheet {sheet_name} not found in Excel"
+    
+    ws = wb[sheet_name]
+    
+    # Prepare rows to append
     for m in measurements:
         hole = str(m.get("Hole")).lstrip("H")
         feat = m.get("Feature")
@@ -318,64 +315,25 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
             val = float(m.get("Value"))
         except:
             val = None
+        
+        # Assuming _status_from_value exists
         status, nominal, lsl, usl = _status_from_value(part, hole, feat, val if val is not None else 0.0)
-
-        # ⭐ Add image path if exists in measurement dict
-        img_path = m.get("ImagePath", None)  # full path string or None
-
-        rows.append({
-            "Timestamp": ts,
-            "Machine": machine,
-            "Part Type": part,
-            "Chamber": chamber,
-            "Piece ID": piece_id,
-            "Part In/Out": part_flow,
-            "Hole": f"H{hole}",
-            "Feature": feat,
-            "Value": val,
-            "Nominal": nominal,
-            "LSL": lsl,
-            "USL": usl,
-            "Status": status,
-            "Notes": notes,
-            "Image Path": img_path
-        })
-
-    if not rows:
-        return False, "No rows to add"
-
-    df_append = pd.DataFrame(rows, columns=DATA_COLS + ["Image Path"])  # add Image Path column
-    for c in ["Value", "Nominal", "LSL", "USL"]:
-        if c in df_append.columns:
-            df_append[c] = pd.to_numeric(df_append[c], errors="coerce")
-
-    df_part = pd.concat([df_part, df_append], ignore_index=True)
-
-    sheets = {
-        SHEET_MB: df_part if part == "Mixing Block" else df_other,
-        SHEET_GW: df_part if part == "Gas/Water Block" else df_other,
-        SHEET_SPECS: df_specs
-    }
-
-    # Use custom file_path if provided
-    save_path = file_path if file_path else EXCEL
-
-    saved, alt = atomic_write_all(save_path, sheets)
-    if saved:
-        try:
-            add_reference_image()  # existing helper, keep
-        except:
-            pass
-        try:
-            apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
-        except:
-            pass
-        return True, save_path  # return actual saved path
-    elif alt:
-        return False, f"Excel locked — saved clone to: {alt}"
-    else:
-        return False, "Failed to save measurements"
-
+        img_path = m.get("ImagePath", None)
+        
+        new_row = [
+            ts, machine, part, chamber, piece_id, part_flow,
+            f"H{hole}", feat, val, nominal, lsl, usl, status, notes, img_path
+        ]
+        
+        ws.append(new_row)  # append to the sheet, formatting preserved
+    
+    try:
+        wb.save(EXISTING_EXCEL)
+        return True, "Saved successfully"
+    except PermissionError:
+        return False, "Excel file is open, please close it first"
+    except Exception as e:
+        return False, f"Failed to save: {str(e)}"
 
     
 def get_available_holes_for_part(part):

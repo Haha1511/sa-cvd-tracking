@@ -228,7 +228,7 @@ if "save_flash" not in st.session_state:
 with tabs[0]:
     st.subheader("Add Measurement")
 
-    st.info("💡 On Streamlit Cloud, the Excel file is handled automatically; no need to close it.")
+    st.info("💡 Please make sure to close the Excel file before performing any actions.")
 
     # ---------------- SESSION STATE FOR AUTO-CLEAR ----------------
     if "clear_meas" not in st.session_state:
@@ -391,28 +391,36 @@ with tabs[0]:
         elif not measurements:
             st.info("No valid measurements entered; nothing saved.")
         else:
-            try:
-                import tempfile
-                temp_path = os.path.join(tempfile.gettempdir(), "test6.xlsx")
-                # Call your existing function, pass temp_path
-                ok, msg = add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements, file_path=temp_path)
+            ok, msg = add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements)
+            if ok:
+                st.session_state.clear_meas = True
+                st.session_state.clear_active = True
 
-                if ok:
-                    st.success(f"✅ Saved measurements to Excel ({msg})")
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                st.session_state["last_saved"] = now
 
-                    # Provide download button in Streamlit
-                    with open(temp_path, "rb") as f:
-                        st.download_button(
-                            label="📥 Download Excel File",
-                            data=f,
-                            file_name="test6.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
-                else:
-                    st.error(f"❌ Failed to save measurements: {msg}")
+                st.session_state.form_key = f"form_add_{st.session_state.form_counter}"
+                st.session_state.form_counter += 1
 
-            except Exception as e:
-                st.error(f"❌ Failed to save measurements: {e}")
+                # IMPORTANT: only store message here (do NOT display it yet)
+                st.session_state["pending_success"] = f"✅ Saved to Excel. ({msg}) — {now}"
+
+                if "analysis_cache" in st.session_state:
+                    st.session_state["analysis_cache"].pop((part,), None)
+
+                st.rerun()
+            else:
+                st.error(f"❌ Failed to save: {msg}")
+
+        # ---------------- PROVIDE DOWNLOAD LINK ----------------
+        if os.path.exists(EXCEL):
+            with open(EXCEL, "rb") as f:
+                st.download_button(
+                    label="📥 Download Latest Excel",
+                    data=f,
+                    file_name=os.path.basename(EXCEL),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
     # ---------------- SHOW SUCCESS MESSAGE AT BOTTOM ----------------
     if "pending_success" in st.session_state:
