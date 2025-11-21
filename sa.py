@@ -333,16 +333,15 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 
 def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements, timestamp=None):
     """
-    Safe version of add_measurement_rows:
-    ✅ Always saves to a timestamped Excel file to avoid lock issues
-    ✅ Preserves formatting, borders, and reference images
-    ✅ Keeps your original DATA_COLS + Image Path
+    Streamlit Cloud safe save:
+    ✅ Always saves to a new timestamped file
+    ✅ Preserves formatting, borders, coloring, and reference images
     """
     ensure_workbook()
 
     ts = timestamp if timestamp is not None else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Read existing sheets
+    # Read sheets from the latest master file
     df_part = read_sheet_safe(SHEET_MB if part == "Mixing Block" else SHEET_GW)
     df_other = read_sheet_safe(SHEET_GW if part == "Mixing Block" else SHEET_MB)
     df_specs = read_sheet_safe(SHEET_SPECS)
@@ -352,15 +351,10 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
     for m in measurements:
         hole = str(m.get("Hole")).lstrip("H")
         feat = m.get("Feature")
-        try:
-            val = float(m.get("Value"))
-        except:
-            val = None
+        try: val = float(m.get("Value"))
+        except: val = None
 
-        status, nominal, lsl, usl = _status_from_value(
-            part, hole, feat, val if val is not None else 0.0
-        )
-
+        status, nominal, lsl, usl = _status_from_value(part, hole, feat, val if val is not None else 0.0)
         img_path = m.get("ImagePath", None)
 
         rows.append({
@@ -397,25 +391,23 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
         SHEET_SPECS: df_specs
     }
 
-    # --- Always save to a timestamped file to avoid Excel locks ---
+    # --- Always save to a unique timestamped file to avoid lock ---
     timestamp_safe = datetime.now().strftime("%Y%m%d%H%M%S")
-    filename_to_save = f"test6_{timestamp_safe}.xlsx"
-    saved, alt = atomic_write_all(filename_to_save, sheets)
+    filename_to_save = f"/mount/src/sa-cvd-tracking/test6_{timestamp_safe}.xlsx"
 
-    if saved:
-        try:
-            add_reference_image()
-        except:
-            pass
-        try:
-            apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
-        except:
-            pass
-        return True, f"✅ Measurements saved to {filename_to_save}"
-    elif alt:
-        return False, f"Excel locked — backup saved to: {alt}"
-    else:
-        return False, "Failed to save measurements"
+    try:
+        with pd.ExcelWriter(filename_to_save, engine="openpyxl") as writer:
+            for sheet_name, df in sheets.items():
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+        # Reapply formatting and reference images
+        add_reference_image()
+        apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
+
+        return True, f"✅ Measurements saved safely: {filename_to_save}"
+
+    except Exception as e:
+        return False, f"❌ Failed to save measurements: {e}"
 
 def get_available_holes_for_part(part):
     """Return hole list depending on part type."""
