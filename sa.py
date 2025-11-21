@@ -46,33 +46,73 @@ DATA_COLS = [
 SPECS_COLS = ["Part Type", "Hole", "Feature", "Nominal", "LSL", "USL", "Tolerance"]
 
 # ---------- Utilities ----------
-def atomic_write_all(filename, sheets_dict):
+def atomic_write_all(filename, sheets_dict, retries=3, retry_delay=0.25):
+    """
+    Atomically write multiple DataFrame sheets to an Excel file.
+    - Returns (saved_path, None) on success.
+    - On PermissionError (file locked) will attempt to write a timestamped alternate file and return (None, alt_path).
+    - On other fatal errors returns (None, None).
+    """
+    import time
     fd, tmp = tempfile.mkstemp(suffix=".xlsx")
     os.close(fd)
     try:
-        with pd.ExcelWriter(tmp, engine="openpyxl") as w:
-            for sheet_name, df in sheets_dict.items():
-                df.to_excel(w, sheet_name=sheet_name, index=False)
-        os.replace(tmp, filename)
-        return filename, None
-    except PermissionError:
-        try: os.remove(tmp)
-        except: pass
-        alt = f"{os.path.splitext(filename)[0]}_LOCKED_{datetime.now().strftime('%Y%m%d%H%M%S')}.xlsx"
+        # Try a few times in case of transient errors
+        last_exc = None
+        for attempt in range(1, retries + 1):
+            try:
+                with pd.ExcelWriter(tmp, engine="openpyxl") as w:
+                    for sheet_name, df in sheets_dict.items():
+                        # ensure we write DataFrames (defensive)
+                        if not isinstance(df, pd.DataFrame):
+                            df = pd.DataFrame(df)
+                        df.to_excel(w, sheet_name=sheet_name, index=False)
+                # replace atomically
+                os.replace(tmp, filename)
+                return filename, None
+            except PermissionError as e:
+                last_exc = e
+                # If file locked, break to create alt
+                break
+            except Exception as e:
+                last_exc = e
+                # small backoff and retry
+                time.sleep(retry_delay)
+                continue
+
+        # If we got here and last exception is PermissionError or replace failed,
+        # attempt to save to a timestamped alternate file to avoid data loss.
         try:
+            alt = f"{os.path.splitext(filename)[0]}_LOCKED_{datetime.now().strftime('%Y%m%d%H%M%S')}.xlsx"
             with pd.ExcelWriter(alt, engine="openpyxl") as w:
                 for sheet_name, df in sheets_dict.items():
+                    if not isinstance(df, pd.DataFrame):
+                        df = pd.DataFrame(df)
                     df.to_excel(w, sheet_name=sheet_name, index=False)
-            return None, alt
-        except Exception:
-            try: os.remove(alt)
-            except: pass
+            # clean tmp if exists
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except:
+                pass
+            return None, os.path.abspath(alt)
+        except Exception as e_alt:
+            # give up: remove tmp and return failure
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except:
+                pass
             return None, None
-    except Exception:
-        try: os.remove(tmp)
-        except: pass
-        return None, None
 
+    finally:
+        # ensure tmp removed if left
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except:
+            pass
+        
 def read_sheet_safe(sheet_name):
     if not os.path.exists(EXCEL):
         return pd.DataFrame(columns=DATA_COLS if sheet_name != SHEET_SPECS else SPECS_COLS)
@@ -292,18 +332,41 @@ from openpyxl import load_workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 
 def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements, timestamp=None):
+    """
+    Same external behaviour as before (returns (True, saved_path) or (False, message)),
+    but implements more robust saving and clearer failure messages.
+    """
     ensure_workbook()
 
     ts = timestamp if timestamp is not None else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # ✔ FIX: always use your original EXCEL file
-    if not os.path.exists(EXCEL):
-        return False, f"Excel file not found: {EXCEL}"
+    # basic sanity
+    if not isinstance(measurements, (list, tuple)) or len(measurements) == 0:
+        return False, "No measurements provided"
 
-    # Read dataframes
-    df_part = read_sheet_safe(SHEET_MB if part == "Mixing Block" else SHEET_GW)
-    df_other = read_sheet_safe(SHEET_GW if part == "Mixing Block" else SHEET_MB)
-    df_specs = read_sheet_safe(SHEET_SPECS)
+    # ensure workbook file exists or create base workbook first
+    if not os.path.exists(EXCEL):
+        # try to create baseline workbook
+        try:
+            sheets = {
+                SHEET_MB: pd.DataFrame(columns=DATA_COLS),
+                SHEET_GW: pd.DataFrame(columns=DATA_COLS),
+                SHEET_SPECS: build_specs_df(),
+                SHEET_GW_REF: pd.DataFrame(["Image Loads Below"])
+            }
+            saved_init, alt_init = atomic_write_all(EXCEL, sheets)
+            if not saved_init and not alt_init:
+                return False, "Could not create base Excel workbook (permission or disk error)"
+        except Exception as e:
+            return False, f"Could not create base Excel workbook: {e}"
+
+    # read existing sheets (defensive)
+    try:
+        df_part = read_sheet_safe(SHEET_MB if part == "Mixing Block" else SHEET_GW)
+        df_other = read_sheet_safe(SHEET_GW if part == "Mixing Block" else SHEET_MB)
+        df_specs = read_sheet_safe(SHEET_SPECS)
+    except Exception as e:
+        return False, f"Failed to read existing Excel sheets: {e}"
 
     rows = []
     for m in measurements:
@@ -312,7 +375,7 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
 
         try:
             val = float(m.get("Value"))
-        except:
+        except Exception:
             val = None
 
         status, nominal, lsl, usl = _status_from_value(
@@ -344,11 +407,16 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
 
     df_append = pd.DataFrame(rows, columns=DATA_COLS + ["Image Path"])
 
+    # numeric conversions
     for c in ["Value", "Nominal", "LSL", "USL"]:
         if c in df_append.columns:
             df_append[c] = pd.to_numeric(df_append[c], errors="coerce")
 
-    df_part = pd.concat([df_part, df_append], ignore_index=True)
+    # append to target sheet dataframe
+    try:
+        df_part = pd.concat([df_part, df_append], ignore_index=True)
+    except Exception as e:
+        return False, f"Failed to combine dataframes before saving: {e}"
 
     sheets = {
         SHEET_MB: df_part if part == "Mixing Block" else df_other,
@@ -356,26 +424,45 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
         SHEET_SPECS: df_specs
     }
 
-    # ✔ FIX: SAFE SAVE WITHOUT ANY EXISTING_EXCEL
+    # attempt atomic save
     saved, alt = atomic_write_all(EXCEL, sheets)
 
+    # interpret results with clear messages
     if saved:
+        # post-save formatting (best-effort)
         try:
             add_reference_image()
-        except:
+        except Exception:
+            # swallow but record not to break save
             pass
         try:
             apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
-        except:
+        except Exception:
             pass
-        return True, saved
+        return True, os.path.abspath(saved)
 
-    elif alt:
-        return False, f"Excel locked — saved clone to: {alt}"
+    if alt:
+        # Excel file locked — but we saved an alternate copy
+        try:
+            # still attempt formatting on the alt file (best-effort)
+            # load alt workbook and attempt to apply coloring if possible
+            try:
+                wb_alt = load_workbook(alt)
+                wb_alt.close()
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return False, f"Excel file locked — a copy was saved to: {alt}"
 
-    else:
-        return False, "Failed to save"
-
+    # final fallback: attempt to write a minimal CSV backup to avoid full failure
+    try:
+        fallback_csv = f"{os.path.splitext(EXCEL)[0]}_BACKUP_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
+        df_part.to_csv(fallback_csv, index=False)
+        return False, f"Failed to save Excel workbook, but data written to CSV backup: {fallback_csv}"
+    except Exception:
+        return False, "Failed to save (unknown error). Please check file permissions and disk space."
+    
 def get_available_holes_for_part(part):
     """Return hole list depending on part type."""
     if part.lower() == "mixing block":
