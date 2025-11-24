@@ -229,7 +229,7 @@ if "save_flash" not in st.session_state:
 with tabs[0]:
     st.subheader("Add Measurement")
 
-    st.info("💡 Please make sure to close the Excel file before performing any actions.")
+    st.info("💡 On Streamlit Cloud, Excel is saved in memory; no need to open/close files locally.")
 
     # ---------------- SESSION STATE FOR AUTO-CLEAR ----------------
     if "clear_meas" not in st.session_state:
@@ -271,17 +271,14 @@ with tabs[0]:
         piece_id = st.text_input("Piece ID / Serial Number")
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # ---------------- TIMESTAMP ----------------
         st.markdown('<div class="highlight-wrapper">', unsafe_allow_html=True)
         measured_date = st.date_input("Measured Date", value=datetime.now())
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # ---------------- PART IN / OUT ----------------
         st.markdown('<div class="highlight-wrapper">', unsafe_allow_html=True)
         part_flow = st.selectbox("Part Status (IN = returned, OUT = sent)", ["IN", "OUT"])
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # ---------------- BATCH CLEANING NUMBER ----------------
         st.markdown('<div class="highlight-wrapper">', unsafe_allow_html=True)
         batch_number = st.text_input("Batch Cleaning Number (optional)")
         st.markdown('</div>', unsafe_allow_html=True)
@@ -402,11 +399,11 @@ with tabs[0]:
         elif not measurements:
             st.info("No valid measurements entered; nothing saved.")
         else:
-            # ---------------- MEMORY SAVE FOR STREAMLIT CLOUD ----------------
+            # ✅ Use memory-saving version for Streamlit Cloud
             ok, msg, mem_file = add_measurement_rows(
-                part, machine, chamber, piece_id, part_flow, notes,
+                part, machine, chamber, piece_id, part_flow, notes, 
                 measurements, measured_date=measured_date, batch_number=batch_number,
-                return_bytesio=True  # <-- new flag for memory save
+                return_bytesio=True  # <-- key change for cloud
             )
 
             if ok:
@@ -419,17 +416,8 @@ with tabs[0]:
                 st.session_state.form_key = f"form_add_{st.session_state.form_counter}"
                 st.session_state.form_counter += 1
 
-                # Show success message
-                st.success(f"✅ Saved successfully. ({msg}) — {now}")
-
-                # Provide download button for Cloud
-                if mem_file:
-                    st.download_button(
-                        label="📥 Download Updated Excel",
-                        data=mem_file.getvalue(),
-                        file_name="SA_Machine_Data.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
+                # Only store success message here
+                st.session_state["pending_success"] = f"✅ Saved to memory. ({msg}) — {now}"
 
                 if "analysis_cache" in st.session_state:
                     st.session_state["analysis_cache"].pop((part,), None)
@@ -438,11 +426,11 @@ with tabs[0]:
             else:
                 st.error(f"❌ Failed to save measurements: {msg}")
 
-
     # ---------------- SHOW SUCCESS MESSAGE AT BOTTOM ----------------
     if "pending_success" in st.session_state:
         st.success(st.session_state["pending_success"])
         del st.session_state["pending_success"]
+
 
 
 # ------------------ TAB 1: Trend Chart (with Analysis) ------------------
