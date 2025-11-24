@@ -371,8 +371,8 @@ with tabs[0]:
             except Exception:
                 st.warning(f"Invalid number for H{it['Hole']} {it['Feature']}: '{raw}' — skipped")
 
-        # Attach all pending photos to corresponding measurements
-        os.makedirs("data/uploaded_images", exist_ok=True)  # Streamlit Cloud writable folder
+        # Attach photos
+        os.makedirs("data/uploaded_images", exist_ok=True)
         for p in st.session_state.pending_photos_list:
             hole = p["hole"]
             feature = p["feature"]
@@ -384,24 +384,24 @@ with tabs[0]:
             with open(img_path, "wb") as f:
                 f.write(file.getbuffer())
 
-            # Assign the image path to all matching measurements
             for m in measurements:
                 if m["Hole"] == hole and m["Feature"].lower() == feature.lower():
                     m["ImagePath"] = img_path
 
-        st.session_state.pending_photos_list = []  # clear after attaching
-        st.session_state.photo_counter = 0  # reset counter
+        st.session_state.pending_photos_list = []
+        st.session_state.photo_counter = 0
 
         if not piece_id:
             st.error("Piece ID / Serial Number is required.")
         elif not measurements:
             st.info("No valid measurements entered; nothing saved.")
         else:
-            # ✅ Use memory-saving version for Streamlit Cloud
+            # ---------------- Save to memory and persistent file ----------------
             ok, msg, mem_file = add_measurement_rows(
-                part, machine, chamber, piece_id, part_flow, notes, 
+                part, machine, chamber, piece_id, part_flow, notes,
                 measurements, measured_date=measured_date, batch_number=batch_number,
-                return_bytesio=True  # <-- key change for cloud
+                return_bytesio=True,
+                save_path="data/SA_Machine_Data.xlsx"  # persistent for other tabs
             )
 
             if ok:
@@ -414,33 +414,23 @@ with tabs[0]:
                 st.session_state.form_key = f"form_add_{st.session_state.form_counter}"
                 st.session_state.form_counter += 1
 
-                # Only store success message here
-                st.session_state["pending_success"] = f"✅ Saved to memory. ({msg}) — {now}"
+                st.session_state["pending_success"] = f"✅ Saved to memory and file. ({msg}) — {now}"
 
                 if "analysis_cache" in st.session_state:
                     st.session_state["analysis_cache"].pop((part,), None)
 
-                # ✅ Save mem_file in session for download after rerun
+                # ---------------- Download button ----------------
                 if mem_file:
-                    mem_file.seek(0)
-                    st.session_state["excel_mem_file"] = mem_file
+                    st.download_button(
+                        label="📥 Download Excel",
+                        data=mem_file,
+                        file_name=f"SA_Machine_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
 
                 st.rerun()
             else:
                 st.error(f"❌ Failed to save measurements: {msg}")
-
-    # ---------------- SHOW SUCCESS MESSAGE + DOWNLOAD BUTTON OUTSIDE FORM ----------------
-    if "pending_success" in st.session_state:
-        st.success(st.session_state["pending_success"])
-        del st.session_state["pending_success"]
-
-    if "excel_mem_file" in st.session_state:
-        st.download_button(
-            label="📥 Download Excel",
-            data=st.session_state["excel_mem_file"],
-            file_name=f"SA_Machine_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
 
 # ------------------ TAB 1: Trend Chart (with Analysis) ------------------
 with tabs[1]:

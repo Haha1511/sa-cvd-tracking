@@ -309,8 +309,7 @@ def _status_from_value(part, hole, feat, val):
     except Exception:
         return ("PASS" if val is not None else "FAIL", None, None, None)
 
-def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements,
-                         measured_date=None, batch_number=None, timestamp=None, return_bytesio=False):
+def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements, measured_date=None, batch_number=None, timestamp=None, return_bytesio=False, save_path=None):
     ensure_workbook()
     ts = timestamp if timestamp is not None else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     df_part = read_sheet_safe(SHEET_MB if part == "Mixing Block" else SHEET_GW)
@@ -334,14 +333,17 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
         except:
             val = None
         status, nominal, lsl, usl = _status_from_value(part, hole, feat, val if val is not None else 0.0)
+
+        # Add image path if exists
         img_path = m.get("ImagePath", None)
+
         rows.append({
             "Timestamp": ts,
             "Measured Date": measured_date_str,
             "Machine": machine,
             "Part Type": part,
             "Part In/Out": part_flow,
-            "Batch Cleaning": batch_number if batch_number else "",
+            "Batch Cleaning": batch_number if batch_number is not None else "",
             "Chamber": chamber,
             "Piece ID": piece_id,
             "Hole": f"H{hole}",
@@ -371,25 +373,37 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
         SHEET_SPECS: df_specs
     }
 
-    # -------------------- SAVE TO MEMORY IF REQUESTED --------------------
+    # ----------------- Save Excel -----------------
+    mem_file = None
+    saved, alt = atomic_write_all(EXCEL, sheets, return_bytesio=return_bytesio)
+    
+    # If return_bytesio, get memory file
     if return_bytesio:
+        from io import BytesIO
         mem_file = BytesIO()
-        with pd.ExcelWriter(mem_file, engine="openpyxl") as writer:
+        with pd.ExcelWriter(mem_file, engine='openpyxl') as writer:
             for sheet_name, df in sheets.items():
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
         mem_file.seek(0)
-        return True, "Saved to memory", mem_file
 
+    # Save persistent copy for other tabs
+    if save_path:
+        with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
+            for sheet_name, df in sheets.items():
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-    # -------------------- FALLBACK: Save to disk (optional) --------------------
-    saved, alt = atomic_write_all(EXCEL, sheets)
     if saved:
-        return True, "Saved to disk", None
-    elif alt:
-        return False, f"Excel locked — saved clone to: {alt}", None
-    else:
-        return False, "Failed to save measurements", None
-    
+        try:
+            add_reference_image()
+        except:
+            pass
+        try:
+            apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
+        except:
+            pass
+
+    return saved, "Saved successfully", mem_file
+
 def get_available_holes_for_part(part):
     """Return hole list depending on part type."""
     if part.lower() == "mixing block":
