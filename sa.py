@@ -29,33 +29,24 @@ SPECS = {
         "4": {"Inner": (9.20, 8.70, 9.70), "Outer": (12.80, 12.30, 13.30)},
     },
     "Gas/Water Block": {
-        "1": {"Inner": (5.90, 5.50, 6.40)},
-        "2": {"Inner": (6.15, 5.65, 6.65)},
+        "1": {"Inner": (6.00, 5.50, 6.50)},
+        "2": {"Inner": (6.00, 5.50, 6.50)},
         "3": {"Inner": (6.00, 5.50, 6.50)},
-        "4": {"Inner": (6.30, 5.80, 6.80)},
-        "5": {"Inner": (6.10, 5.60, 6.60)},
+        "4": {"Inner": (6.00, 5.50, 6.50)},
+        "5": {"Inner": (6.00, 5.50, 6.50)},
     },
 }
 
 DATA_COLS = [
-    "Timestamp", "Machine", "Part Type", "Chamber", "Piece ID", "Part In/Out",
+    "Timestamp","Measured Date", "Machine", "Part Type", "Chamber", "Piece ID", "Part In/Out", "Batch Cleaning",
     "Hole", "Feature", "Value",
     "Nominal", "LSL", "USL", "Status", "Notes"
 ]
 
 SPECS_COLS = ["Part Type", "Hole", "Feature", "Nominal", "LSL", "USL", "Tolerance"]
 
-# ------------------ Initialize current Excel ------------------
-if "current_excel" not in st.session_state:
-    st.session_state["current_excel"] = EXCEL  # default starting file
-
 # ---------- Utilities ----------
 def atomic_write_all(filename, sheets_dict):
-    """
-    Returns:
-        - saved_file: the actual saved file path
-        - backup_file: if Excel locked, the backup file path
-    """
     fd, tmp = tempfile.mkstemp(suffix=".xlsx")
     os.close(fd)
     try:
@@ -67,7 +58,7 @@ def atomic_write_all(filename, sheets_dict):
     except PermissionError:
         try: os.remove(tmp)
         except: pass
-        alt = f"{os.path.splitext(filename)[0]}_{datetime.now().strftime('%Y%m%d%H%M%S')}_LOCKED.xlsx"
+        alt = f"{os.path.splitext(filename)[0]}_LOCKED_{datetime.now().strftime('%Y%m%d%H%M%S')}.xlsx"
         try:
             with pd.ExcelWriter(alt, engine="openpyxl") as w:
                 for sheet_name, df in sheets_dict.items():
@@ -81,19 +72,14 @@ def atomic_write_all(filename, sheets_dict):
         try: os.remove(tmp)
         except: pass
         return None, None
-        
 
-
-# ------------------ Modified read_sheet_safe ------------------
 def read_sheet_safe(sheet_name):
-    current_file = st.session_state.get("current_excel", EXCEL)
-    if not os.path.exists(current_file):
+    if not os.path.exists(EXCEL):
         return pd.DataFrame(columns=DATA_COLS if sheet_name != SHEET_SPECS else SPECS_COLS)
     try:
-        return pd.read_excel(current_file, sheet_name=sheet_name)
+        return pd.read_excel(EXCEL, sheet_name=sheet_name)
     except Exception:
         return pd.DataFrame(columns=DATA_COLS if sheet_name != SHEET_SPECS else SPECS_COLS)
-
 
 def build_specs_df():
     rows = []
@@ -302,23 +288,20 @@ def _status_from_value(part, hole, feat, val):
     except Exception:
         return ("PASS" if val is not None else "FAIL", None, None, None)
 
-from openpyxl import load_workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
-
-# ------------------ Modified add_measurement_rows ------------------
-def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements, timestamp=None):
+def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements, measured_date=None, batch_number=None, timestamp=None):
     ensure_workbook()
-    ts = timestamp if timestamp else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # read current Excel file from session
-    current_file = st.session_state.get("current_excel", EXCEL)
-
-    if not os.path.exists(current_file):
-        return False, f"Excel file not found: {current_file}"
-
+    ts = timestamp if timestamp is not None else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     df_part = read_sheet_safe(SHEET_MB if part == "Mixing Block" else SHEET_GW)
     df_other = read_sheet_safe(SHEET_GW if part == "Mixing Block" else SHEET_MB)
     df_specs = read_sheet_safe(SHEET_SPECS)
+
+    # Format measured date to only YYYY-MM-DD
+    if measured_date is None:
+        measured_date_str = datetime.now().strftime("%Y-%m-%d")
+    else:
+        measured_date_str = str(measured_date)
+        if isinstance(measured_date, datetime):
+            measured_date_str = measured_date.strftime("%Y-%m-%d")
 
     rows = []
     for m in measurements:
@@ -329,15 +312,19 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
         except:
             val = None
         status, nominal, lsl, usl = _status_from_value(part, hole, feat, val if val is not None else 0.0)
+
+        # ⭐ Add image path if exists in measurement dict
         img_path = m.get("ImagePath", None)
 
         rows.append({
             "Timestamp": ts,
+            "Measured Date": measured_date_str,
             "Machine": machine,
             "Part Type": part,
+            "Part In/Out": part_flow,
+            "Batch Cleaning": batch_number if batch_number is not None else "",
             "Chamber": chamber,
             "Piece ID": piece_id,
-            "Part In/Out": part_flow,
             "Hole": f"H{hole}",
             "Feature": feat,
             "Value": val,
@@ -352,36 +339,75 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
     if not rows:
         return False, "No rows to add"
 
-    df_append = pd.DataFrame(rows, columns=DATA_COLS + ["Image Path"])
+    df_append = pd.DataFrame(rows)
     for c in ["Value", "Nominal", "LSL", "USL"]:
         if c in df_append.columns:
             df_append[c] = pd.to_numeric(df_append[c], errors="coerce")
 
     df_part = pd.concat([df_part, df_append], ignore_index=True)
+
     sheets = {
         SHEET_MB: df_part if part == "Mixing Block" else df_other,
         SHEET_GW: df_part if part == "Gas/Water Block" else df_other,
         SHEET_SPECS: df_specs
     }
 
-    saved_file, backup_file = atomic_write_all(EXCEL, sheets)
+    saved, alt = atomic_write_all(EXCEL, sheets)
+    if saved:
+        try:
+            add_reference_image()
+        except:
+            pass
+        try:
+            apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
+        except:
+            pass
 
-    # Use the actual saved file as current
-    if saved_file:
-        st.session_state["current_excel"] = saved_file
-        try: add_reference_image()
-        except: pass
-        try: apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
-        except: pass
-        return True, saved_file
+        import openpyxl
+        from openpyxl.utils import get_column_letter
 
-    elif backup_file:
-        st.session_state["current_excel"] = backup_file
-        return False, f"Excel locked — backup saved to: {backup_file}"
+        # ------------------ AUTO ADJUST COLUMNS ------------------
+        def auto_adjust_columns(excel_file, sheet_names):
+            wb = openpyxl.load_workbook(excel_file)
+            for sheet_name in sheet_names:
+                if sheet_name not in wb.sheetnames:
+                    continue
+                sheet = wb[sheet_name]
+
+                for i, col_cells in enumerate(sheet.iter_cols(1, sheet.max_column), start=1):
+                    col_letter = get_column_letter(i)
+                    max_length = 0
+                    for cell in col_cells:
+                        if cell.value is None:
+                            continue
+                        cell_len = len(str(cell.value))
+                        if cell_len > max_length:
+                            max_length = cell_len
+
+                    # Special adjustments for known long columns
+                    header = sheet.cell(row=1, column=i).value
+                    if header in ["Notes", "Image Path", "Batch Cleaning"]:
+                        adjusted_width = max(25, max_length + 2)  # force wide enough for readability
+                    elif header in ["Measured Date", "Part In/Out", "Machine", "Part Type", "Chamber", "Hole", "Feature", "Status"]:
+                        adjusted_width = max(12, max_length + 2)
+                    else:
+                        adjusted_width = max(15, max_length + 2)
+
+                    # Set width, cap at max to avoid extremely wide columns
+                    sheet.column_dimensions[col_letter].width = min(adjusted_width, 50)
+
+            wb.save(excel_file)
+
+        # ------------------ CALL AUTO ADJUST ------------------
+        auto_adjust_columns(EXCEL, [SHEET_MB, SHEET_GW])
+
+        return True, saved
+    elif alt:
+        return False, f"Excel locked — saved clone to: {alt}"
     else:
-        return False, "Failed to save"
-    return False, f"❌ Failed to save measurements: {e}"
+        return False, "Failed to save measurements"
 
+    
 def get_available_holes_for_part(part):
     """Return hole list depending on part type."""
     if part.lower() == "mixing block":
@@ -761,4 +787,45 @@ def draw_trend_with_spec(df, spec_min, spec_max, title="Trend Chart"):
             st.write(i)
     else:
         st.success("✅ All points are within the specification.")
+
+import openpyxl
+from openpyxl.utils import get_column_letter
+
+# ------------------ AUTO ADJUST COLUMNS FUNCTION ------------------
+def auto_adjust_columns_test6(excel_file, sheet_names):
+    """
+    Adjust column widths for given sheets in test6.xlsx
+    """
+    wb = openpyxl.load_workbook(excel_file)
+    for sheet_name in sheet_names:
+        if sheet_name not in wb.sheetnames:
+            continue
+        sheet = wb[sheet_name]
+
+        for i, col_cells in enumerate(sheet.iter_cols(1, sheet.max_column), start=1):
+            col_letter = get_column_letter(i)
+            max_length = 0
+            for cell in col_cells:
+                if cell.value is None:
+                    continue
+                cell_len = len(str(cell.value))
+                if cell_len > max_length:
+                    max_length = cell_len
+
+            # Special adjustments for known long columns
+            header = sheet.cell(row=1, column=i).value
+            if header in ["Notes", "Image Path", "Batch Cleaning"]:
+                adjusted_width = max(25, max_length + 2)  # long text
+            elif header in ["Measured Date", "Part In/Out", "Machine", "Part Type", "Chamber", "Hole", "Feature", "Status"]:
+                adjusted_width = max(12, max_length + 2)
+            else:
+                adjusted_width = max(15, max_length + 2)
+
+            sheet.column_dimensions[col_letter].width = min(adjusted_width, 50)  # cap max width
+
+    wb.save(excel_file)
+
+# ------------------ USAGE ------------------
+# Call this right after you save test6.xlsx
+auto_adjust_columns_test6("test6.xlsx", ["Mixing Block Data", "Gas/Water Block Data"])
 
