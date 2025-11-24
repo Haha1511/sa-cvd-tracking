@@ -288,7 +288,10 @@ def _status_from_value(part, hole, feat, val):
     except Exception:
         return ("PASS" if val is not None else "FAIL", None, None, None)
 
-def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements, measured_date=None, batch_number=None, timestamp=None):
+def add_measurement_rows(
+    part, machine, chamber, piece_id, part_flow, notes, measurements,
+    measured_date=None, batch_number=None, timestamp=None, return_bytesio=False
+):
     ensure_workbook()
     ts = timestamp if timestamp is not None else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     df_part = read_sheet_safe(SHEET_MB if part == "Mixing Block" else SHEET_GW)
@@ -337,7 +340,7 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
         })
 
     if not rows:
-        return False, "No rows to add"
+        return False, "No rows to add", None
 
     df_append = pd.DataFrame(rows)
     for c in ["Value", "Nominal", "LSL", "USL"]:
@@ -352,60 +355,67 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
         SHEET_SPECS: df_specs
     }
 
-    saved, alt = atomic_write_all(EXCEL, sheets)
-    if saved:
-        try:
-            add_reference_image()
-        except:
-            pass
-        try:
-            apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
-        except:
-            pass
-
-        import openpyxl
-        from openpyxl.utils import get_column_letter
-
-        # ------------------ AUTO ADJUST COLUMNS ------------------
-        def auto_adjust_columns(excel_file, sheet_names):
-            wb = openpyxl.load_workbook(excel_file)
-            for sheet_name in sheet_names:
-                if sheet_name not in wb.sheetnames:
-                    continue
-                sheet = wb[sheet_name]
-
-                for i, col_cells in enumerate(sheet.iter_cols(1, sheet.max_column), start=1):
-                    col_letter = get_column_letter(i)
-                    max_length = 0
-                    for cell in col_cells:
-                        if cell.value is None:
-                            continue
-                        cell_len = len(str(cell.value))
-                        if cell_len > max_length:
-                            max_length = cell_len
-
-                    # Special adjustments for known long columns
-                    header = sheet.cell(row=1, column=i).value
-                    if header in ["Notes", "Image Path", "Batch Cleaning"]:
-                        adjusted_width = max(25, max_length + 2)  # force wide enough for readability
-                    elif header in ["Measured Date", "Part In/Out", "Machine", "Part Type", "Chamber", "Hole", "Feature", "Status"]:
-                        adjusted_width = max(12, max_length + 2)
-                    else:
-                        adjusted_width = max(15, max_length + 2)
-
-                    # Set width, cap at max to avoid extremely wide columns
-                    sheet.column_dimensions[col_letter].width = min(adjusted_width, 50)
-
-            wb.save(excel_file)
-
-        # ------------------ CALL AUTO ADJUST ------------------
-        auto_adjust_columns(EXCEL, [SHEET_MB, SHEET_GW])
-
-        return True, saved
-    elif alt:
-        return False, f"Excel locked — saved clone to: {alt}"
+    # ---------------- SAVE TO MEMORY OR FILE ----------------
+    if return_bytesio:
+        # Save workbook to BytesIO for Streamlit Cloud
+        mem_file = BytesIO()
+        with pd.ExcelWriter(mem_file, engine="openpyxl") as writer:
+            for sheet_name, df in sheets.items():
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+        mem_file.seek(0)
+        return True, "Saved in memory", mem_file
     else:
-        return False, "Failed to save measurements"
+        saved, alt = atomic_write_all(EXCEL, sheets)
+        if saved:
+            try:
+                add_reference_image()
+            except:
+                pass
+            try:
+                apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
+            except:
+                pass
+
+            import openpyxl
+            from openpyxl.utils import get_column_letter
+
+            # ------------------ AUTO ADJUST COLUMNS ------------------
+            def auto_adjust_columns(excel_file, sheet_names):
+                wb = openpyxl.load_workbook(excel_file)
+                for sheet_name in sheet_names:
+                    if sheet_name not in wb.sheetnames:
+                        continue
+                    sheet = wb[sheet_name]
+
+                    for i, col_cells in enumerate(sheet.iter_cols(1, sheet.max_column), start=1):
+                        col_letter = get_column_letter(i)
+                        max_length = 0
+                        for cell in col_cells:
+                            if cell.value is None:
+                                continue
+                            cell_len = len(str(cell.value))
+                            if cell_len > max_length:
+                                max_length = cell_len
+
+                        header = sheet.cell(row=1, column=i).value
+                        if header in ["Notes", "Image Path", "Batch Cleaning"]:
+                            adjusted_width = max(25, max_length + 2)
+                        elif header in ["Measured Date", "Part In/Out", "Machine", "Part Type", "Chamber", "Hole", "Feature", "Status"]:
+                            adjusted_width = max(12, max_length + 2)
+                        else:
+                            adjusted_width = max(15, max_length + 2)
+
+                        sheet.column_dimensions[col_letter].width = min(adjusted_width, 50)
+
+                wb.save(excel_file)
+
+            auto_adjust_columns(EXCEL, [SHEET_MB, SHEET_GW])
+            return True, saved, None
+        elif alt:
+            return False, f"Excel locked — saved clone to: {alt}", None
+        else:
+            return False, "Failed to save measurements", None
+
 
     
 def get_available_holes_for_part(part):

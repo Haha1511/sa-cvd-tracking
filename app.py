@@ -1,3 +1,4 @@
+from io import BytesIO
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -401,10 +402,11 @@ with tabs[0]:
         elif not measurements:
             st.info("No valid measurements entered; nothing saved.")
         else:
-            # ✅ Pass measured_date and batch_number to add_measurement_rows
-            ok, msg = add_measurement_rows(
-                part, machine, chamber, piece_id, part_flow, notes, 
-                measurements, measured_date=measured_date, batch_number=batch_number
+            # ---------------- MEMORY SAVE FOR STREAMLIT CLOUD ----------------
+            ok, msg, mem_file = add_measurement_rows(
+                part, machine, chamber, piece_id, part_flow, notes,
+                measurements, measured_date=measured_date, batch_number=batch_number,
+                return_bytesio=True  # <-- new flag for memory save
             )
 
             if ok:
@@ -417,15 +419,25 @@ with tabs[0]:
                 st.session_state.form_key = f"form_add_{st.session_state.form_counter}"
                 st.session_state.form_counter += 1
 
-                # IMPORTANT: only store message here (do NOT display it yet)
-                st.session_state["pending_success"] = f"✅ Saved to Excel. ({msg}) — {now}"
+                # Show success message
+                st.success(f"✅ Saved successfully. ({msg}) — {now}")
+
+                # Provide download button for Cloud
+                if mem_file:
+                    st.download_button(
+                        label="📥 Download Updated Excel",
+                        data=mem_file.getvalue(),
+                        file_name="SA_Machine_Data.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
 
                 if "analysis_cache" in st.session_state:
                     st.session_state["analysis_cache"].pop((part,), None)
 
                 st.rerun()
             else:
-                st.error(f"❌ Failed to save ***PLEASE MAKE SURE CLOSED EXCEL FILE FIRST***: {msg}")
+                st.error(f"❌ Failed to save measurements: {msg}")
+
 
     # ---------------- SHOW SUCCESS MESSAGE AT BOTTOM ----------------
     if "pending_success" in st.session_state:
