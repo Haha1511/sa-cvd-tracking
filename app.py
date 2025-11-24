@@ -228,7 +228,6 @@ if "save_flash" not in st.session_state:
 # ------------------ TAB 0: Add Measurement ------------------
 with tabs[0]:
     st.subheader("Add Measurement")
-
     st.info("💡 Please make sure to close the Excel file before performing any actions.")
 
     # ---------------- SESSION STATE FOR AUTO-CLEAR ----------------
@@ -396,12 +395,11 @@ with tabs[0]:
         elif not measurements:
             st.info("No valid measurements entered; nothing saved.")
         else:
-            # ---------------- Save to memory and persistent file ----------------
+            # ✅ Use memory-saving version for Streamlit Cloud
             ok, msg, mem_file = add_measurement_rows(
                 part, machine, chamber, piece_id, part_flow, notes,
                 measurements, measured_date=measured_date, batch_number=batch_number,
-                return_bytesio=True,
-                save_path="data/SA_Machine_Data.xlsx"  # persistent for other tabs
+                return_bytesio=True
             )
 
             if ok:
@@ -414,13 +412,13 @@ with tabs[0]:
                 st.session_state.form_key = f"form_add_{st.session_state.form_counter}"
                 st.session_state.form_counter += 1
 
-                st.session_state["pending_success"] = f"✅ Saved to memory and file. ({msg}) — {now}"
+                st.session_state["pending_success"] = f"✅ Saved successfully ({msg}) — {now}"
+                st.success(st.session_state["pending_success"])
 
-                if "analysis_cache" in st.session_state:
-                    st.session_state["analysis_cache"].pop((part,), None)
-
-                # ---------------- Download button ----------------
+                # -------------------- STORE MEM EXCEL & DOWNLOAD --------------------
                 if mem_file:
+                    mem_file.seek(0)
+                    st.session_state["last_mem_excel"] = mem_file  # <-- store in session
                     st.download_button(
                         label="📥 Download Excel",
                         data=mem_file,
@@ -432,10 +430,21 @@ with tabs[0]:
             else:
                 st.error(f"❌ Failed to save measurements: {msg}")
 
+
 # ------------------ TAB 1: Trend Chart (with Analysis) ------------------
 with tabs[1]:
     st.subheader("Trend Chart")
     st.info("💡 Please make sure to close the Excel file before performing any actions.")
+
+    # Read from memory if exists
+    if "last_mem_excel" in st.session_state:
+        mem_excel = st.session_state["last_mem_excel"]
+        mem_excel.seek(0)
+        df_mb = pd.read_excel(mem_excel, sheet_name=SHEET_MB)
+        df_gw = pd.read_excel(mem_excel, sheet_name=SHEET_GW)
+    else:
+        df_mb = read_sheet_safe(SHEET_MB)
+        df_gw = read_sheet_safe(SHEET_GW)
 
     auto = st.checkbox("Auto Refresh (30s)")
     if auto:
@@ -450,7 +459,6 @@ with tabs[1]:
         # Use Measured Date instead of Timestamp
         df_trend["Measured Date"] = pd.to_datetime(df_trend["Measured Date"], errors="coerce").dt.date
         df_trend = df_trend.dropna(subset=["Measured Date"])
-
 
         # Machine filter
         machines = ["All"] + sorted(df_trend["Machine"].dropna().unique().tolist())
@@ -470,7 +478,7 @@ with tabs[1]:
         holes = sorted(valid_holes, key=safe_hole_sort_key)
         if part_trend.lower() == "gas/water block":
             holes = [f"H{i}" for i in range(1, 6)]
-        selected_holes = st.multiselect("Select Hole(s)", holes, default=[holes[0]])
+        selected_holes = st.multiselect("Select Hole(s)", holes, default=[holes[0]] if holes else [])
 
         # Feature selection
         features = sorted(df_trend[df_trend["Hole"].isin(selected_holes)]["Feature"].dropna().unique().tolist())
@@ -538,8 +546,7 @@ with tabs[1]:
                         st.error("❌ Start date cannot be after end date.")
                         df_plot_date = df_plot_filtered
                     else:
-                        df_plot_date = df_plot_filtered[(df_plot_filtered["Measured Date"] >= start_date) &
-                                                        (df_plot_filtered["Measured Date"] <= end_date)]
+                        df_plot_date = df_plot_filtered[(df_plot_filtered["Measured Date"] >= start_date) & (df_plot_filtered["Measured Date"] <= end_date)]
 
                 if df_plot_date.empty:
                     st.warning("⚠ No data in the selected date range.")
@@ -604,12 +611,9 @@ with tabs[1]:
                 plt.tight_layout()
                 st.pyplot(fig)
 
-
-
                 # --- Download ---
                 buf = BytesIO()
                 fig.savefig(buf, format="png", dpi=300, bbox_inches="tight")
-
                 st.download_button(
                     "📥 Download Trend Chart",
                     buf.getvalue(),
@@ -1052,8 +1056,17 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("View & Manage Data")
     st.info("💡 Please make sure to close the Excel file before performing any actions.")
-    
-    # ✅ Toast message handler (must be placed near top, after st.tabs)
+
+    if "last_mem_excel" in st.session_state:
+        mem_excel = st.session_state["last_mem_excel"]
+        mem_excel.seek(0)
+        df_mb = pd.read_excel(mem_excel, sheet_name=SHEET_MB)
+        df_gw = pd.read_excel(mem_excel, sheet_name=SHEET_GW)
+    else:
+        df_mb = read_sheet_safe(SHEET_MB)
+        df_gw = read_sheet_safe(SHEET_GW)
+
+    # ✅ Toast message handler
     if "toast_msg" in st.session_state:
         st.toast(st.session_state["toast_msg"], icon=st.session_state.get("toast_icon", "ℹ️"))
         del st.session_state["toast_msg"]
@@ -1066,10 +1079,9 @@ with tabs[2]:
     # --- Try to read Excel safely ---
     try:
         df_view = pd.read_excel(EXCEL, sheet_name=sheet_name)
-        # 🔹 Remove any unnamed columns automatically
         df_view = df_view.loc[:, ~df_view.columns.str.contains("^Unnamed", case=False)]
 
-        # Reorder columns: Piece ID -> Part In/Out -> Batch Cleaning -> rest
+        # Reorder columns
         if "Piece ID" in df_view.columns and "Part In/Out" in df_view.columns:
             cols = list(df_view.columns)
             if "Batch Cleaning" in cols:
@@ -1077,11 +1089,10 @@ with tabs[2]:
             cols.remove("Part In/Out")
             idx = cols.index("Piece ID")
             cols.insert(idx + 1, "Part In/Out")
-            cols.insert(idx + 2, "Batch Cleaning")  # now Batch Cleaning is after Part In/Out
+            cols.insert(idx + 2, "Batch Cleaning")
             df_view = df_view[cols]
 
-
-        # 🔹 Add Measured Date after Timestamp if exists
+        # Add Measured Date after Timestamp if exists
         if "Timestamp" in df_view.columns and "Measured Date" in df_view.columns:
             cols = list(df_view.columns)
             cols.remove("Measured Date")
@@ -1098,13 +1109,13 @@ with tabs[2]:
 
     import urllib.parse
     import base64
-        
+
     # ===================== DISPLAY TABLE =====================
     if df_view.empty:
         st.info("No records found.")
     else:
         df_display = df_view.copy()
-        df_display.index = df_display.index + 1  # make 1-based like Excel
+        df_display.index = df_display.index + 1
 
         # ---------- Build HTML Table ----------
         html = """
@@ -1149,15 +1160,11 @@ with tabs[2]:
         <table class="custom-table">
             <thead><tr>
         """
-        # Header
         html += "<th>Row</th>" + "".join(f"<th>{col}</th>" for col in df_display.columns) + "</tr></thead><tbody>"
 
-        # Rows with separator lines
         for i in range(len(df_display)):
             row = df_display.iloc[i]
             row_class = ""
-
-            # Add bold line between measurement groups (Piece ID change)
             if i > 0 and "Piece ID" in df_display.columns:
                 prev_id = df_display.iloc[i - 1]["Piece ID"]
                 curr_id = row["Piece ID"]
@@ -1165,7 +1172,7 @@ with tabs[2]:
                     row_class = "separator"
 
             html += f"<tr class='{row_class}'>"
-            html += f"<td><b>{i+1}</b></td>"  # show index
+            html += f"<td><b>{i+1}</b></td>"
 
             for col in df_display.columns:
                 val = row[col]
@@ -1178,15 +1185,17 @@ with tabs[2]:
                     elif str(val).strip().lower() == "fail":
                         cell_class = "fail"
 
-                # Display image in the table only
+                # Display image in table for PNG/JPG
                 if col == "Image Path" and val != "":
                     img_path = val.strip()
                     if os.path.exists(img_path):
                         with open(img_path, "rb") as f:
                             data = f.read()
+                            ext = os.path.splitext(img_path)[1].lower()
+                            mime = "jpeg" if ext in [".jpg", ".jpeg"] else "png"
                             encoded = base64.b64encode(data).decode()
                         img_html = f"<td class='{cell_class}'>"
-                        img_html += f"<img src='data:image/jpeg;base64,{encoded}' class='image-cell'/>"
+                        img_html += f"<img src='data:image/{mime};base64,{encoded}' class='image-cell'/>"
                         img_html += "</td>"
                     else:
                         img_html = f"<td class='{cell_class}'> </td>"
@@ -1210,7 +1219,6 @@ with tabs[2]:
             st.warning("Enter rows or ranges to delete.")
         else:
             try:
-                # --- Parse user input for 1-based deletion ---
                 rows_to_delete = []
                 parts = [r.strip() for r in raw.split(",") if r.strip()]
                 for p in parts:
@@ -1227,22 +1235,18 @@ with tabs[2]:
                     st.warning("⚠️ No valid rows to delete.")
                 else:
                     df_upd = df_view.drop(df_view.index[rows_to_delete_zero_based]).reset_index(drop=True)
-
-                    # Remove unnamed columns (Excel artifacts)
                     df_upd = df_upd.loc[:, ~df_upd.columns.str.contains("^Unnamed", case=False)]
 
                     try:
                         with pd.ExcelWriter(EXCEL, mode="a", engine="openpyxl", if_sheet_exists="replace") as writer:
                             df_upd.to_excel(writer, sheet_name=sheet_name, index=False)
 
-                        # ✅ Show success before rerun
                         st.success(f"✅ Deleted rows: {rows_to_delete}")
                         st.toast(f"Rows {rows_to_delete} deleted successfully 🗑️", icon="🗑️")
 
                         import time
                         time.sleep(1.5)
                         st.rerun()
-
                     except PermissionError:
                         st.error("❌ Excel file is open. Please **close Excel first** and try again.")
                     except Exception as e:
@@ -1255,7 +1259,6 @@ with tabs[2]:
     st.markdown("### 🖼️ Delete Image for Selected Hole")
     st.info("Enter row numbers exactly as shown in the table (1-based). Example: `1,2` or `3-5,7`")
 
-    # Input for rows or ranges to delete images
     delete_image_input = st.text_input("Rows to delete image for the selected hole (e.g. 1,2 or 1-5,7)", key="delete_image_input_view")
 
     if st.button("Delete Image for Selected Holes"):
@@ -1264,7 +1267,6 @@ with tabs[2]:
             st.warning("Enter rows or ranges to delete the images.")
         else:
             try:
-                # --- Parse user input for 1-based image deletion ---
                 rows_to_delete_image = []
                 parts = [r.strip() for r in raw.split(",") if r.strip()]
                 for p in parts:
@@ -1281,15 +1283,12 @@ with tabs[2]:
                     st.warning("⚠️ No valid rows to delete image for.")
                 else:
                     for row_to_delete_image in rows_to_delete_image_zero_based:
-                        image_path = df_view.loc[row_to_delete_image, 'Image Path']  # Get the image path of the selected row
+                        image_path = df_view.loc[row_to_delete_image, 'Image Path']
                         if image_path and os.path.exists(image_path):
                             try:
-                                os.remove(image_path)  # Delete the image file
-                                # Update the DataFrame to remove the image path
+                                os.remove(image_path)
                                 df_upd = df_view.copy()
-                                df_upd.at[row_to_delete_image, 'Image Path'] = None  # Remove the image path
-
-                                # Save the updated DataFrame back to Excel
+                                df_upd.at[row_to_delete_image, 'Image Path'] = None
                                 with pd.ExcelWriter(EXCEL, mode="a", engine="openpyxl", if_sheet_exists="replace") as writer:
                                     df_upd.to_excel(writer, sheet_name=sheet_name, index=False)
 
@@ -1301,12 +1300,11 @@ with tabs[2]:
                             st.warning(f"⚠️ No image found for Hole {df_view.loc[row_to_delete_image, 'Hole']} at {image_path}.")
                     
                     import time
-                    time.sleep(1.5)  # short pause to let message show
+                    time.sleep(1.5)
                     st.rerun()
 
             except Exception as e:
                 st.error(f"❌ Failed to delete images: {e}")
-
 
     # ===================== EDIT MEASUREMENT DATA =====================
     st.markdown("### ✏️ Edit Measurement Data (Excel-style 1-based Index)")
@@ -1329,18 +1327,15 @@ with tabs[2]:
         selected_row = df_view.iloc[edit_row]
         st.markdown(f"**Editing Row {edit_row_display}** — Piece ID: `{selected_row.get('Piece ID', 'N/A')}`")
 
-        # ---------- EDITABLE COLUMNS ----------
         editable_cols = [
             "Measured Date", "Batch Cleaning", "Machine", "Part Type", "Chamber", "Piece ID",
             "Hole", "Feature", "Value", "Nominal", "LSL", "USL", "Status", "Part In/Out", "Notes", "Image Path"
         ]
         editable_cols = [c for c in editable_cols if c in df_view.columns]
 
-        # Drop the extra `ImagePath` column if it exists
         if 'ImagePath' in df_view.columns:
             df_view.drop(columns=['ImagePath'], inplace=True)
 
-        # Rename `ImagePath` to `Image Path` (if necessary)
         if 'Image Path' not in df_view.columns:
             if 'ImagePath' in df_view.columns:
                 df_view.rename(columns={'ImagePath': 'Image Path'}, inplace=True)
@@ -1350,11 +1345,10 @@ with tabs[2]:
             for col in editable_cols:
                 val = selected_row[col]
 
-                # Use date_input for Measured Date
                 if col == "Measured Date":
                     try:
                         if pd.isna(val) or val in ["", None]:
-                            date_val = datetime.now().date()  # default to today if empty/NaT
+                            date_val = datetime.now().date()
                         else:
                             date_val = pd.to_datetime(val).date()
                     except Exception:
@@ -1364,8 +1358,6 @@ with tabs[2]:
                         value=date_val,
                         key=f"edit_{col}"
                     )
-
-                # Use number_input for Batch Cleaning
                 elif col == "Batch Cleaning":
                     try:
                         batch_val = float(val) if val != "" else 0
@@ -1386,7 +1378,6 @@ with tabs[2]:
                         key=f"edit_{col}"
                     )
 
-            # 🔹 NEW: Part In/Out selection (already in editable_cols)
             part_inout_val = selected_row.get("Part In/Out", "IN")
             edit_part_inout = st.selectbox(
                 "Part In/Out",
@@ -1394,20 +1385,20 @@ with tabs[2]:
                 index=0 if str(part_inout_val).upper() == "IN" else 1
             )
 
-            # Check for Hole Image Path Upload
-            hole_type = selected_row.get('Hole', 'N/A')  # Get the hole type (e.g., H1, H2)
+            hole_type = selected_row.get('Hole', 'N/A')
             hole_image = st.file_uploader(f"Upload Image for Hole {hole_type}", type=["png", "jpg", "jpeg"], key=f"hole_{hole_type}")
 
             if hole_image:
                 feature_type = selected_row.get("Feature", "Unknown")
-                image_filename = f"{selected_row['Hole']}_{feature_type}.jpg"
+                ext = os.path.splitext(hole_image.name)[1].lower()
+                image_filename = f"{selected_row['Hole']}_{feature_type}{ext}"
+                os.makedirs("uploaded_images", exist_ok=True)
                 image_path = os.path.join("uploaded_images", image_filename)
                 with open(image_path, "wb") as img_file:
                     img_file.write(hole_image.getbuffer())
                 new_entries["Image Path"] = image_path
                 st.markdown(
-                    f'<a href="file:///{os.path.abspath(image_path)}" target="_blank">'
-                    f'<img src="file:///{os.path.abspath(image_path)}" width="400" style="border-radius: 10px; cursor: pointer;" /></a>',
+                    f'<img src="file:///{os.path.abspath(image_path)}" width="400" style="border-radius: 10px; cursor: pointer;" />',
                     unsafe_allow_html=True
                 )
 
@@ -1417,7 +1408,7 @@ with tabs[2]:
             df_upd = df_view.copy()
             for col, txt in new_entries.items():
                 if col == "Measured Date":
-                    df_upd.at[edit_row, col] = txt.strftime("%Y-%m-%d")  # just date
+                    df_upd.at[edit_row, col] = txt.strftime("%Y-%m-%d")
                 elif col == "Batch Cleaning":
                     df_upd.at[edit_row, col] = txt if txt != 0 else ""
                 elif col in ["Value", "Nominal", "LSL", "USL"]:
@@ -1432,17 +1423,14 @@ with tabs[2]:
                 else:
                     df_upd.at[edit_row, col] = txt
 
-            # 🔹 Save Part In/Out selection
             df_upd.at[edit_row, "Part In/Out"] = edit_part_inout
 
-            # 🔹 Keep column order same: Piece ID → Part In/Out → Batch Cleaning → rest
             if "Piece ID" in df_upd.columns and "Part In/Out" in df_upd.columns:
                 cols = list(df_upd.columns)
                 if "Part In/Out" in cols:
                     cols.remove("Part In/Out")
                 idx = cols.index("Piece ID")
                 cols.insert(idx + 1, "Part In/Out")
-                # Insert Batch Cleaning right after Part In/Out
                 if "Batch Cleaning" in cols:
                     cols.remove("Batch Cleaning")
                 idx_part = cols.index("Part In/Out")
@@ -1460,13 +1448,11 @@ with tabs[2]:
                 import time
                 time.sleep(1.5)
                 st.rerun()
-
             except PermissionError:
                 st.error("❌ Excel file is open. Please **close Excel first** and try again.")
             except Exception as e:
                 st.error(f"❌ Failed to save changes: {e}")
-
-                
+               
 # ------------------ TAB 3: View Spec ------------------
 with tabs[3]:
     st.subheader("Specs — Limits & Tolerances")
