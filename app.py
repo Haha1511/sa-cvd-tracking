@@ -36,6 +36,18 @@ from sa import (
     export_specs_for_vendor,
 )
 
+# ------------------ SETUP WRITABLE DATA FOLDER ------------------
+os.makedirs("data", exist_ok=True)
+
+# Copy template Excel files if not exist
+if not os.path.exists("data/test6.xlsx"):
+    shutil.copy("test6.xlsx", "data/test6.xlsx")
+if not os.path.exists("data/trendchart.xlsx"):
+    shutil.copy("trendchart.xlsx", "data/trendchart.xlsx")
+
+EXCEL = "data/test6.xlsx"
+TREND_EXCEL = "data/trendchart.xlsx"
+
 
 # Ensure workbook exists (backend will create if missing)
 ensure_workbook()
