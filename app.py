@@ -1102,7 +1102,8 @@ with tabs[2]:
         st.stop()
     except Exception as e:
         st.error(f"⚠️ Failed to load data: {e}")
-        df_view = pd.DataFrame(columns=DATA_COLS + ["Measured Date", "Batch Cleaning #"])    import urllib.parse
+        df_view = pd.DataFrame(columns=DATA_COLS + ["Measured Date", "Batch Cleaning #"])
+    import urllib.parse
     import base64
 
      # ===================== DISPLAY TABLE =====================
