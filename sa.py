@@ -377,9 +377,9 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
         with pd.ExcelWriter(mem_file, engine="openpyxl") as writer:
             for sheet_name, df in sheets.items():
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
-            writer.save()
         mem_file.seek(0)
         return True, "Saved to memory", mem_file
+
 
     # -------------------- FALLBACK: Save to disk (optional) --------------------
     saved, alt = atomic_write_all(EXCEL, sheets)
