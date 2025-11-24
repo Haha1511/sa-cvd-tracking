@@ -36,17 +36,6 @@ from sa import (
     export_specs_for_vendor,
 )
 
-# ------------------ SETUP WRITABLE DATA FOLDER ------------------
-os.makedirs("data", exist_ok=True)
-
-# Copy template Excel files if not exist
-if not os.path.exists("data/test6.xlsx"):
-    shutil.copy("test6.xlsx", "data/test6.xlsx")
-if not os.path.exists("data/trendchart.xlsx"):
-    shutil.copy("trendchart.xlsx", "data/trendchart.xlsx")
-
-EXCEL = "data/test6.xlsx"
-TREND_EXCEL = "data/trendchart.xlsx"
 
 # Ensure workbook exists (backend will create if missing)
 ensure_workbook()
@@ -234,9 +223,11 @@ if "reset_inputs" not in st.session_state:
 if "save_flash" not in st.session_state:
     st.session_state.save_flash = False
     
+
 # ------------------ TAB 0: Add Measurement ------------------
 with tabs[0]:
     st.subheader("Add Measurement")
+
     st.info("💡 Please make sure to close the Excel file before performing any actions.")
 
     # ---------------- SESSION STATE FOR AUTO-CLEAR ----------------
@@ -256,6 +247,7 @@ with tabs[0]:
     current_form_key = st.session_state.form_key
 
     with st.form(current_form_key):
+
         st.markdown('<div class="highlight-wrapper">', unsafe_allow_html=True)
         part = st.selectbox("Part Type", ["Mixing Block", "Gas/Water Block"])
         st.markdown('</div>', unsafe_allow_html=True)
@@ -278,9 +270,19 @@ with tabs[0]:
         piece_id = st.text_input("Piece ID / Serial Number")
         st.markdown('</div>', unsafe_allow_html=True)
 
+        # ---------------- TIMESTAMP ----------------
+        st.markdown('<div class="highlight-wrapper">', unsafe_allow_html=True)
+        measured_date = st.date_input("Measured Date", value=datetime.now())
+        st.markdown('</div>', unsafe_allow_html=True)
+
         # ---------------- PART IN / OUT ----------------
         st.markdown('<div class="highlight-wrapper">', unsafe_allow_html=True)
         part_flow = st.selectbox("Part Status (IN = returned, OUT = sent)", ["IN", "OUT"])
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # ---------------- BATCH CLEANING NUMBER ----------------
+        st.markdown('<div class="highlight-wrapper">', unsafe_allow_html=True)
+        batch_number = st.text_input("Batch Cleaning Number (optional)")
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('<div class="highlight-wrapper">', unsafe_allow_html=True)
@@ -288,20 +290,25 @@ with tabs[0]:
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("**Measurements (mm)** — leave empty to skip a field")
+
         holes = ["1", "2", "3", "4", "5"]
         cols_in = st.columns(3)
         inputs = []
         col_idx = 0
         for h in holes:
             with cols_in[col_idx]:
+
                 st.markdown('<div class="highlight-wrapper">', unsafe_allow_html=True)
                 st.markdown(f"**H{h}**")
+
                 for f in get_features_for_part(part, h):
                     key = f"meas_H{h}_{f}"
                     default_value = "" if st.session_state.clear_meas else st.session_state.get(key, "")
                     val = st.text_input(f"{f}", key=key, value=default_value)
                     inputs.append({"Hole": str(h), "Feature": f, "Value": val})
+
                 st.markdown('</div>', unsafe_allow_html=True)
+
             col_idx = (col_idx + 1) % 3
 
         # ======================================================
@@ -311,9 +318,22 @@ with tabs[0]:
         st.subheader("📸 Upload Photos for Specific Holes (Multiple Allowed)")
 
         idx = st.session_state.photo_counter
-        photo_hole = st.selectbox("Select Hole", ["1", "2", "3", "4", "5"], key=f"photo_hole_add_{idx}")
-        photo_feature = st.selectbox("Select Feature", ["Inner", "Outer"], key=f"photo_feature_add_{idx}")
-        uploaded_photo = st.file_uploader("Upload Photo (PNG/JPG)", type=["png", "jpg", "jpeg"], key=f"photo_upload_add_{idx}")
+
+        photo_hole = st.selectbox(
+            "Select Hole",
+            ["1", "2", "3", "4", "5"],
+            key=f"photo_hole_add_{idx}"
+        )
+        photo_feature = st.selectbox(
+            "Select Feature",
+            ["Inner", "Outer"],
+            key=f"photo_feature_add_{idx}"
+        )
+        uploaded_photo = st.file_uploader(
+            "Upload Photo (PNG/JPG)",
+            type=["png", "jpg", "jpeg"],
+            key=f"photo_upload_add_{idx}"
+        )
 
         # Add photo to pending list
         if uploaded_photo:
@@ -336,7 +356,7 @@ with tabs[0]:
                 st.write(f"{idx}. Hole: H{p['hole']} - {p['feature']}")
 
         # ================= Form submit button =================
-        submitted = st.form_submit_button("💾 Save Measurements")
+        submitted = st.form_submit_button("Save Measurements")
 
     # ---------------- AFTER FORM CREATION ----------------
     if st.session_state.get("clear_active", False):
@@ -371,82 +391,46 @@ with tabs[0]:
             # Assign the image path to all matching measurements
             for m in measurements:
                 if m["Hole"] == hole and m["Feature"].lower() == feature.lower():
-                    m["Image Path"] = img_path
+                    m["ImagePath"] = img_path
 
-        # Reset pending photos
-        st.session_state.pending_photos_list = []
-        st.session_state.photo_counter = 0
+        st.session_state.pending_photos_list = []  # clear after attaching
+        st.session_state.photo_counter = 0  # reset counter
 
-        # Validate required fields
         if not piece_id:
             st.error("Piece ID / Serial Number is required.")
         elif not measurements:
             st.info("No valid measurements entered; nothing saved.")
         else:
-            # ---------------- SAVE TO EXCEL ----------------
-            try:
-                # Determine sheet
-                sheet_name_add = "Mixing Block Data" if part == "Mixing Block" else "Gas-Water Block Data"
-                # Read existing sheet
-                try:
-                    df_existing = pd.read_excel(EXCEL, sheet_name=sheet_name_add)
-                    df_existing = df_existing.loc[:, ~df_existing.columns.str.contains("^Unnamed")]
-                except Exception:
-                    df_existing = pd.DataFrame(columns=[
-                        "Machine", "Part Type", "Chamber", "Piece ID", "Hole",
-                        "Feature", "Value", "Nominal", "LSL", "USL",
-                        "Status", "PartFlow", "Notes", "Image Path"
-                    ])
+            # ✅ Pass measured_date and batch_number to add_measurement_rows
+            ok, msg = add_measurement_rows(
+                part, machine, chamber, piece_id, part_flow, notes, 
+                measurements, measured_date=measured_date, batch_number=batch_number
+            )
 
-                # Append all measurements as rows
-                new_rows = []
-                for meas in measurements:
-                    row = {
-                        "Machine": machine,
-                        "Part Type": part,
-                        "Chamber": chamber,
-                        "Piece ID": piece_id,
-                        "Hole": meas["Hole"],
-                        "Feature": meas["Feature"],
-                        "Value": meas["Value"],
-                        "Nominal": pd.NA,
-                        "LSL": pd.NA,
-                        "USL": pd.NA,
-                        "Status": "PASS",
-                        "PartFlow": part_flow,
-                        "Notes": notes,
-                        "Image Path": meas.get("Image Path", "")
-                    }
-                    new_rows.append(row)
-
-                df_updated = pd.concat([df_existing, pd.DataFrame(new_rows)], ignore_index=True)
-
-                # Save to Excel
-                with pd.ExcelWriter(EXCEL, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
-                    df_updated.to_excel(writer, sheet_name=sheet_name_add, index=False)
-
-                # ✅ Success feedback
-                st.success(f"✅ Saved {len(new_rows)} measurements for Piece ID {piece_id}.")
-                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if ok:
                 st.session_state.clear_meas = True
                 st.session_state.clear_active = True
+
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                st.session_state["last_saved"] = now
+
                 st.session_state.form_key = f"form_add_{st.session_state.form_counter}"
                 st.session_state.form_counter += 1
-                st.session_state["pending_success"] = f"✅ Saved to Excel. ({len(new_rows)} measurements) — {now}"
 
-                # Force refresh to show in View & Manage Data
+                # IMPORTANT: only store message here (do NOT display it yet)
+                st.session_state["pending_success"] = f"✅ Saved to Excel. ({msg}) — {now}"
+
+                if "analysis_cache" in st.session_state:
+                    st.session_state["analysis_cache"].pop((part,), None)
+
                 st.rerun()
-
-            except PermissionError:
-                st.error("❌ Excel file is open. Please close Excel first.")
-            except Exception as e:
-                st.error(f"❌ Failed to save measurements: {e}")
+            else:
+                st.error(f"❌ Failed to save ***PLEASE MAKE SURE CLOSED EXCEL FILE FIRST***: {msg}")
 
     # ---------------- SHOW SUCCESS MESSAGE AT BOTTOM ----------------
     if "pending_success" in st.session_state:
         st.success(st.session_state["pending_success"])
         del st.session_state["pending_success"]
-
 
 
 # ------------------ TAB 1: Trend Chart (with Analysis) ------------------
@@ -459,25 +443,14 @@ with tabs[1]:
         st.markdown('<meta http-equiv="refresh" content="30">', unsafe_allow_html=True)
 
     part_trend = st.selectbox("Part Type", ["Mixing Block", "Gas/Water Block"], key="trend_part")
-    
-    # ---------------- FIX: Always re-read Excel for latest data ----------------
-    try:
-        df_trend = show_trend_df(part_trend)
-    except Exception as e:
-        st.error(f"Failed to load trend data: {e}")
-        df_trend = pd.DataFrame()
-
-    # Clear analysis cache if new measurements were just saved
-    if st.session_state.get("last_saved", None):
-        if "analysis_cache" in st.session_state:
-            st.session_state["analysis_cache"] = {}
-        st.session_state["last_saved"] = None  # Reset after clearing cache
+    df_trend = show_trend_df(part_trend)
 
     if df_trend is None or df_trend.empty:
         st.info("No measurement data available yet. Add measurements in Add Measurement tab.")
     else:
-        df_trend["Timestamp"] = pd.to_datetime(df_trend["Timestamp"], errors="coerce")
-        df_trend = df_trend.dropna(subset=["Timestamp"])
+        # Use Measured Date instead of Timestamp
+        df_trend["Measured Date"] = pd.to_datetime(df_trend["Measured Date"], errors="coerce").dt.date
+        df_trend = df_trend.dropna(subset=["Measured Date"])
 
         # Machine filter
         machines = ["All"] + sorted(df_trend["Machine"].dropna().unique().tolist())
@@ -504,7 +477,7 @@ with tabs[1]:
         feat = st.selectbox("Feature", features)
 
         # Filter df for selected holes & feature
-        df_plot_filtered = df_trend[(df_trend["Hole"].isin(selected_holes)) & (df_trend["Feature"] == feat)].sort_values("Timestamp")
+        df_plot_filtered = df_trend[(df_trend["Hole"].isin(selected_holes)) & (df_trend["Feature"] == feat)].sort_values("Measured Date")
 
         if df_plot_filtered.empty:
             st.warning("No data for this selection.")
@@ -512,6 +485,7 @@ with tabs[1]:
             # ------------------ Trend Data Table ------------------
             st.markdown("### 📘 Trend Data Table")
             if len(selected_holes) == 1:
+                # Single hole → show spec coloring
                 single_hole = selected_holes[0]
                 df_single = df_plot_filtered[df_plot_filtered["Hole"] == single_hole]
 
@@ -520,271 +494,265 @@ with tabs[1]:
                         val = float(row["Value"])
                     except:
                         val = None
-
                     try:
                         lsl = float(row["LSL"]) if "LSL" in row and not pd.isna(row["LSL"]) else None
                     except:
                         lsl = None
-
                     try:
                         usl = float(row["USL"]) if "USL" in row and not pd.isna(row["USL"]) else None
                     except:
                         usl = None
-
                     colors = [""] * len(row)
                     value_idx = row.index.get_loc("Value")
-
                     if val is not None:
                         if (lsl is not None and val < lsl) or (usl is not None and val > usl):
                             colors[value_idx] = "background-color: #FFCCCC"  # RED → out of spec
                         else:
                             colors[value_idx] = "background-color: #CCFFCC"  # GREEN → within spec
-
                     return colors
 
                 st.dataframe(
-                    df_single[["Timestamp", "Machine", "Chamber", "Hole", "Feature", "Value", "LSL", "USL"]].style.apply(highlight_value_only, axis=1),
+                    df_single[["Measured Date", "Machine", "Chamber", "Hole", "Feature", "Value", "LSL", "USL"]].style.apply(highlight_value_only, axis=1),
                     use_container_width=True
                 )
 
-            # ------------------ Date Range Filter (Safe Version) ------------------
-            min_dt = df_plot_filtered["Timestamp"].min()
-            max_dt = df_plot_filtered["Timestamp"].max()
+            # ------------------ Date Range Filter ------------------
+            min_dt = df_plot_filtered["Measured Date"].min()
+            max_dt = df_plot_filtered["Measured Date"].max()
 
             if pd.isna(min_dt) or pd.isna(max_dt):
                 st.warning("⚠ No valid date values found.")
                 df_plot_date = df_plot_filtered
             else:
-                min_date = min_dt.date()
-                max_date = max_dt.date()
-                if min_date == max_date:
-                    st.info(f"Only one date found: **{min_date}**. No date filter applied.")
+                if min_dt == max_dt:
+                    st.info(f"Only one date found: **{min_dt}**. No date filter applied.")
                     df_plot_date = df_plot_filtered
                 else:
                     col_d1, col_d2 = st.columns(2)
                     with col_d1:
-                        start_date = st.date_input("Start Date", value=min_date, min_value=min_date, max_value=max_date)
+                        start_date = st.date_input("Start Date", value=min_dt, min_value=min_dt, max_value=max_dt)
                     with col_d2:
-                        end_date = st.date_input("End Date", value=max_date, min_value=min_date, max_value=max_date)
+                        end_date = st.date_input("End Date", value=max_dt, min_value=min_dt, max_value=max_dt)
 
                     if start_date > end_date:
                         st.error("❌ Start date cannot be after end date.")
                         df_plot_date = df_plot_filtered
                     else:
-                        start_dt = pd.to_datetime(start_date)
-                        end_dt = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-                        df_plot_date = df_plot_filtered[
-                            (df_plot_filtered["Timestamp"] >= start_dt) &
-                            (df_plot_filtered["Timestamp"] <= end_dt)
-                        ]
+                        df_plot_date = df_plot_filtered[(df_plot_filtered["Measured Date"] >= start_date) &
+                                                        (df_plot_filtered["Measured Date"] <= end_date)]
 
                 if df_plot_date.empty:
                     st.warning("⚠ No data in the selected date range.")
 
-            # ------------------ PLOTTING ------------------
-            fig, ax = plt.subplots(figsize=(10, 4.5))
-            ax.set_facecolor("#f5f5f5")
-            ax.grid(True, linestyle="--", linewidth=0.7, alpha=0.5)
+                # ------------------ Professional Plotting ------------------
+                fig, ax = plt.subplots(figsize=(10, 4.5))
+                ax.set_facecolor("#f5f5f5")
+                ax.grid(True, linestyle="--", linewidth=0.7, alpha=0.5)
 
-            hole_colors_dict = {}
-            default_colors = ["#1F77B4", "#FF5733", "#33FF57", "#9B59B6",
-                              "#F1C40F", "#E67E22", "#1ABC9C", "#8E44AD"]
-            for i, hole in enumerate(selected_holes):
-                hole_colors_dict[hole] = default_colors[i % len(default_colors)]
+                hole_colors_dict = {}
+                default_colors = ["#1F77B4", "#FF5733", "#33FF57", "#9B59B6",
+                                  "#F1C40F", "#E67E22", "#1ABC9C", "#8E44AD"]
+                for i, hole in enumerate(selected_holes):
+                    hole_colors_dict[hole] = default_colors[i % len(default_colors)]
 
-            for i, hole in enumerate(selected_holes):
-                df_h = df_plot_date[df_plot_date["Hole"] == hole]
-                if df_h.empty:
-                    continue
+                for i, hole in enumerate(selected_holes):
+                    df_h = df_plot_date[df_plot_date["Hole"] == hole]
+                    if df_h.empty:
+                        continue
 
-                x_values = range(1, len(df_h)+1)
-                y_values = df_h["Value"].astype(float)
+                    x_values = range(1, len(df_h)+1)
+                    y_values = df_h["Value"].astype(float)
 
-                lsl_val = df_h["LSL"].dropna().iloc[0] if "LSL" in df_h.columns and not df_h["LSL"].dropna().empty else None
-                usl_val = df_h["USL"].dropna().iloc[0] if "USL" in df_h.columns and not df_h["USL"].dropna().empty else None
-                if lsl_val is not None and usl_val is not None:
-                    ax.fill_between(x_values, lsl_val, usl_val, color="#d4f4dd", alpha=0.3, label="Spec zone")
+                    # Spec zone shading
+                    lsl_val = df_h["LSL"].dropna().iloc[0] if "LSL" in df_h.columns and not df_h["LSL"].dropna().empty else None
+                    usl_val = df_h["USL"].dropna().iloc[0] if "USL" in df_h.columns and not df_h["USL"].dropna().empty else None
+                    if lsl_val is not None and usl_val is not None:
+                        ax.fill_between(x_values, lsl_val, usl_val, color="#d4f4dd", alpha=0.3, label="Spec zone")
 
-                color = hole_colors_dict[hole]
-                ax.plot(x_values, y_values, color=color, linewidth=2.2, label=f"{hole} Value")
-                ax.scatter(x_values, y_values, color=color, s=65, edgecolors="white", linewidth=0.7, zorder=3)
+                    # Plot values & markers
+                    ax.plot(x_values, y_values, color=hole_colors_dict[hole], linewidth=2.2, label=f"{hole} Value")
+                    ax.scatter(x_values, y_values, color=hole_colors_dict[hole], s=65, edgecolors="white", linewidth=0.7, zorder=3)
 
-                if len(x_values) >= 2:
-                    z = np.polyfit(list(x_values), y_values, 1)
-                    p = np.poly1d(z)
-                    ax.plot(x_values, p(x_values), linestyle="--", color=color, alpha=0.7, label=f"{hole} Trend")
+                    # Trend line
+                    if len(x_values) >= 2:
+                        z = np.polyfit(list(x_values), y_values, 1)
+                        p = np.poly1d(z)
+                        ax.plot(x_values, p(x_values), linestyle="--", color=hole_colors_dict[hole], alpha=0.7, label=f"{hole} Trend")
 
-                nominal_val = df_h["Nominal"].dropna().iloc[0] if "Nominal" in df_h.columns and not df_h["Nominal"].dropna().empty else None
-                if nominal_val is not None:
-                    ax.axhline(nominal_val, linestyle="--", color="yellow", linewidth=1.5, alpha=0.7)
-                if lsl_val is not None:
-                    ax.axhline(lsl_val, linestyle="--", color="red", linewidth=1.5, alpha=0.7)
-                if usl_val is not None:
-                    ax.axhline(usl_val, linestyle="--", color="green", linewidth=1.5, alpha=0.7)
+                    # Annotate last value
+                    ax.text(x_values[-1]+0.1, y_values.iloc[-1], f"{y_values.iloc[-1]:.2f}", 
+                            fontsize=9, fontweight="bold", color=hole_colors_dict[hole], va="bottom", ha="left")
 
-            ax.set_xlabel("Measurement Count", fontsize=10, color="#333333")
-            ax.set_ylabel("Measurement (mm)", fontsize=10, color="#333333")
-            ax.tick_params(colors="#333333", labelsize=9)
-            ax.set_title(f"Trend — {part_trend}", fontsize=13, color="#222222", fontweight="bold")
-            ax.legend(fontsize=9, loc="upper left", framealpha=0.9)
-            plt.tight_layout()
-            st.pyplot(fig)
+                    # Nominal/LSL/USL lines
+                    nominal_val = df_h["Nominal"].dropna().iloc[0] if "Nominal" in df_h.columns and not df_h["Nominal"].dropna().empty else None
+                    if nominal_val is not None:
+                        ax.axhline(nominal_val, linestyle="--", color="yellow", linewidth=1.5, alpha=0.7, label="Nominal")
+                    if lsl_val is not None:
+                        ax.axhline(lsl_val, linestyle="--", color="red", linewidth=1.5, alpha=0.7, label="LSL")
+                    if usl_val is not None:
+                        ax.axhline(usl_val, linestyle="--", color="green", linewidth=1.5, alpha=0.7, label="USL")
 
+                ax.set_xlabel("Measurement Count", fontsize=10, color="#333333")
+                ax.set_ylabel("Measurement (mm)", fontsize=10, color="#333333")
+                ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.2f} mm"))
+                ax.tick_params(colors="#333333", labelsize=9)
+                mach_label = mch if mch != "All" else "All Machines"
+                ch_label = ch if ch != "All" else "All Chambers"
+                ax.set_title(f"Trend — {part_trend} ({feat})\n{mach_label}, {ch_label}", fontsize=13, color="#222222", fontweight="bold")
+                ax.legend(fontsize=9, loc="upper left", framealpha=0.9)
 
-            # --- Download ---
-            buf = BytesIO()
-            fig.savefig(buf, format="png", dpi=300, bbox_inches="tight")
-
-            st.download_button(
-            "📥 Download Trend Chart",
-                buf.getvalue(),
-                file_name=f"Trend_{feat}.png",
-                mime="image/png",
-            )
+                plt.tight_layout()
+                st.pyplot(fig)
 
 
-    # ------------------ Trend Analysis UI (Multi-hole with specs) ------------------
-    st.markdown(
-        """
-        <style>
-        .status-green { color: #28a745; font-weight:700; }
-        .status-green2 { color: #2ecc71; font-weight:700; }
-        .status-yellow { color: #f1c40f; font-weight:700; }
-        .status-red { color: #e74c3c; font-weight:700; }
-        .analysis-box { background:#f2f2f2; padding:12px; border-radius:8px; margin-bottom:10px; color:#000000; }
-        .analysis-title { font-weight:800; font-size:1.02rem; }
-        .last-val-badge { font-weight:800; padding:4px 8px; border-radius:6px; color:#fff; }
-        .last-val-green { background-color:#28a745; }
-        .last-val-yellow { background-color:#f1c40f; color:#000; }
-        .last-val-red { background-color:#e74c3c; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
 
-    col_an1, col_an2 = st.columns([3, 1])
-    with col_an1:
-        st.write("Click **Analyze Trend** to compute linear trend (slope), R², Δ, last value, and spec info per hole.")
-    with col_an2:
-        analyze_btn = st.button("Analyze Trend", key=f"analyze_{part_trend}_{feat}")
+                # --- Download ---
+                buf = BytesIO()
+                fig.savefig(buf, format="png", dpi=300, bbox_inches="tight")
 
-    # Initialize cache
-    if "analysis_cache" not in st.session_state:
-        st.session_state["analysis_cache"] = {}
-
-    def compute_trend_analysis(df_in):
-        result = {
-            "slope": 0.0, "r2": 0.0, "delta": 0.0,
-            "trend_status": ("Stable", "status-green"),
-            "prox_status": None, "nominal": None,
-            "lsl": None, "usl": None, "last_val": None,
-        }
-
-        if df_in is None or df_in.empty:
-            return result
-
-        df = df_in.sort_values("Timestamp").copy()
-        y = pd.to_numeric(df["Value"], errors="coerce").fillna(0).astype(float).values
-        if len(y) == 0: 
-            return result
-
-        x = (df["Timestamp"] - df["Timestamp"].min()).dt.total_seconds() / 86400.0
-        if len(x) >= 2 and not np.allclose(y, y[0]):
-            p = np.polyfit(x, y, 1)
-            slope, intercept = float(p[0]), float(p[1])
-            yhat = np.polyval(p, x)
-            denom = np.sum((y - np.mean(y)) ** 2)
-            r2 = 1 - np.sum((y - yhat) ** 2) / denom if denom != 0 else 1.0
-        else:
-            slope = 0.0
-            intercept = float(y[0])
-            r2 = 0.0
-
-        delta = float(y[-1] - y[0])
-        abs_slope = abs(slope)
-        if abs_slope < 0.01:
-            trend_status = ("Stable", "status-green")
-        elif abs_slope < 0.1:
-            trend_status = ("Drifting", "status-yellow")
-        else:
-            trend_status = ("Rapid change", "status-red")
-
-        # Nominal/LSL/USL
-        nominal = df["Nominal"].dropna().iloc[0] if "Nominal" in df.columns and not df["Nominal"].dropna().empty else None
-        lsl = df["LSL"].dropna().iloc[0] if "LSL" in df.columns and not df["LSL"].dropna().empty else None
-        usl = df["USL"].dropna().iloc[0] if "USL" in df.columns and not df["USL"].dropna().empty else None
-        last_val = float(y[-1])
-
-        prox_status = None
-        if lsl is not None and usl is not None:
-            if last_val < lsl or last_val > usl:
-                prox_status = ("Out of spec", "status-red", f"Last value {last_val:.4f} outside spec [{lsl}, {usl}]")
-            else:
-                span = usl - lsl if (usl - lsl) != 0 else 1.0
-                dist_to_nearest = min(abs(last_val - lsl), abs(usl - last_val))
-                proximity = dist_to_nearest / span
-                if proximity < 0.10:
-                    prox_status = ("Near limit", "status-yellow", f"Last value {last_val:.4f} within 10% of limit")
-                else:
-                    prox_status = ("Within spec", "status-green2", f"Last value {last_val:.4f} comfortably within spec")
-
-        return {
-            "slope": slope, "r2": r2, "delta": delta,
-            "trend_status": trend_status, "prox_status": prox_status,
-            "nominal": nominal, "lsl": lsl, "usl": usl,
-            "last_val": last_val,
-        }
-
-    # Loop through selected holes
-    for hole in selected_holes:
-        df_hole = df_plot_date[df_plot_date["Hole"] == hole]
-        cache_key = (part_trend, hole, feat)
-        result = None
-
-        if analyze_btn:
-            try:
-                result = compute_trend_analysis(df_hole)
-                st.session_state["analysis_cache"][cache_key] = result
-            except Exception as e:
-                st.error(f"Analysis failed for {hole}: {e}")
-                result = None
-        elif cache_key in st.session_state["analysis_cache"]:
-            result = st.session_state["analysis_cache"][cache_key]
-
-        if result:
-            trend_label, trend_css = result["trend_status"]
-            prox = result.get("prox_status")
-            summary_css = prox[1] if prox else trend_css
-            last_val = result.get("last_val")
-            last_badge_class = "last-val-green"
-            if prox:
-                if prox[1] == "status-red": last_badge_class = "last-val-red"
-                elif prox[1] == "status-yellow": last_badge_class = "last-val-yellow"
-
-            summary_html = (
-                f"<div class='analysis-box'>"
-                f"<div class='analysis-title'>"
-                f"<span class='{summary_css}'>"
-                f"<b>{hole}</b> — trend: <b>{trend_label.lower()}</b>, slope = <code>{result['slope']:.4f}</code> mm/day, R² = <code>{result['r2']:.3f}</code>, Δ = <code>{result['delta']:.4f}</code>."
-                f"</span></div>"
-                f"<div style='margin-top:4px;'>"
-                f"<b>Nominal:</b> {result.get('nominal','N/A')} &nbsp;&nbsp; "
-                f"<b>LSL:</b> {result.get('lsl','N/A')} &nbsp;&nbsp; "
-                f"<b>USL:</b> {result.get('usl','N/A')}"
-                f"</div>"
-                f"<span class='last-val-badge {last_badge_class}'>Last: {last_val:.4f}</span>"
-            )
-
-            if prox:
-                summary_html += (
-                    f"<div style='margin-top:4px;'>"
-                    f"<b>Spec Check:</b> <span class='{prox[1]}'>{prox[0]}</span><br>"
-                    f"<i>{prox[2]}</i></div>"
+                st.download_button(
+                    "📥 Download Trend Chart",
+                    buf.getvalue(),
+                    file_name=f"Trend_{feat}.png",
+                    mime="image/png",
                 )
 
-            summary_html += "</div>"
-            st.markdown(summary_html, unsafe_allow_html=True)
 
+                # ------------------ Trend Analysis UI (Multi-hole with specs) ------------------
+                st.markdown(
+                    """
+                    <style>
+                    .status-green { color: #28a745; font-weight:700; }
+                    .status-green2 { color: #2ecc71; font-weight:700; }
+                    .status-yellow { color: #f1c40f; font-weight:700; }
+                    .status-red { color: #e74c3c; font-weight:700; }
+                    .analysis-box { background:#f2f2f2; padding:12px; border-radius:8px; margin-bottom:10px; color:#000000; }
+                    .analysis-title { font-weight:800; font-size:1.02rem; }
+                    .last-val-badge { font-weight:800; padding:4px 8px; border-radius:6px; color:#fff; }
+                    .last-val-green { background-color:#28a745; }
+                    .last-val-yellow { background-color:#f1c40f; color:#000; }
+                    .last-val-red { background-color:#e74c3c; }
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                col_an1, col_an2 = st.columns([3, 1])
+                with col_an1:
+                    st.write("Click **Analyze Trend** to compute linear trend (slope), R², Δ, last value, and spec info per hole.")
+                with col_an2:
+                    analyze_btn = st.button("Analyze Trend", key=f"analyze_{part_trend}_{feat}")
+
+                # Initialize cache
+                if "analysis_cache" not in st.session_state:
+                    st.session_state["analysis_cache"] = {}
+
+                def compute_trend_analysis(df_in):
+                    result = {
+                        "slope": 0.0, "r2": 0.0, "delta": 0.0,
+                        "trend_status": ("Stable", "status-green"),
+                        "prox_status": None, "nominal": None,
+                        "lsl": None, "usl": None, "last_val": None,
+                    }
+
+                    if df_in is None or df_in.empty:
+                        return result
+
+                    df = df_in.sort_values("Timestamp").copy()
+                    y = pd.to_numeric(df["Value"], errors="coerce").fillna(0).astype(float).values
+                    if len(y) == 0: return result
+
+                    x = (df["Timestamp"] - df["Timestamp"].min()).dt.total_seconds() / 86400.0
+                    if len(x) >= 2 and not np.allclose(y, y[0]):
+                        p = np.polyfit(x, y, 1)
+                        slope, intercept = float(p[0]), float(p[1])
+                        yhat = np.polyval(p, x)
+                        denom = np.sum((y - np.mean(y)) ** 2)
+                        r2 = 1 - np.sum((y - yhat) ** 2) / denom if denom != 0 else 1.0
+                    else:
+                        slope = 0.0; intercept = float(y[0]); r2 = 0.0
+
+                    delta = float(y[-1] - y[0])
+                    abs_slope = abs(slope)
+                    if abs_slope < 0.01: trend_status = ("Stable", "status-green")
+                    elif abs_slope < 0.1: trend_status = ("Drifting", "status-yellow")
+                    else: trend_status = ("Rapid change", "status-red")
+
+                    # Nominal/LSL/USL
+                    nominal = df["Nominal"].dropna().iloc[0] if "Nominal" in df.columns and not df["Nominal"].dropna().empty else None
+                    lsl = df["LSL"].dropna().iloc[0] if "LSL" in df.columns and not df["LSL"].dropna().empty else None
+                    usl = df["USL"].dropna().iloc[0] if "USL" in df.columns and not df["USL"].dropna().empty else None
+                    last_val = float(y[-1])
+
+                    prox_status = None
+                    if lsl is not None and usl is not None:
+                        if last_val < lsl or last_val > usl:
+                            prox_status = ("Out of spec", "status-red", f"Last value {last_val:.4f} outside spec [{lsl}, {usl}]")
+                        else:
+                            span = usl - lsl if (usl - lsl) != 0 else 1.0
+                            dist_to_nearest = min(abs(last_val - lsl), abs(usl - last_val))
+                            proximity = dist_to_nearest / span
+                            if proximity < 0.10:
+                                prox_status = ("Near limit", "status-yellow", f"Last value {last_val:.4f} within 10% of limit")
+                            else:
+                                prox_status = ("Within spec", "status-green2", f"Last value {last_val:.4f} comfortably within spec")
+
+                    return {
+                        "slope": slope, "r2": r2, "delta": delta,
+                        "trend_status": trend_status, "prox_status": prox_status,
+                        "nominal": nominal, "lsl": lsl, "usl": usl,
+                        "last_val": last_val,
+                    }
+
+                # Loop through selected holes
+                for hole in selected_holes:
+                    df_hole = df_plot_date[df_plot_date["Hole"] == hole]
+                    cache_key = (part_trend, hole, feat)
+                    result = None
+
+                    if analyze_btn:
+                        try:
+                            result = compute_trend_analysis(df_hole)
+                            st.session_state["analysis_cache"][cache_key] = result
+                        except Exception as e:
+                            st.error(f"Analysis failed for {hole}: {e}")
+                            result = None
+                    elif cache_key in st.session_state["analysis_cache"]:
+                        result = st.session_state["analysis_cache"][cache_key]
+
+                    if result:
+                        trend_label, trend_css = result["trend_status"]
+                        prox = result.get("prox_status")
+                        summary_css = prox[1] if prox else trend_css
+                        last_val = result.get("last_val")
+                        last_badge_class = "last-val-green"
+                        if prox:
+                            if prox[1] == "status-red": last_badge_class = "last-val-red"
+                            elif prox[1] == "status-yellow": last_badge_class = "last-val-yellow"
+
+                        summary_html = (
+                            f"<div class='analysis-box'>"
+                            f"<div class='analysis-title'>"
+                            f"<span class='{summary_css}'>"
+                            f"<b>{hole}</b> — trend: <b>{trend_label.lower()}</b>, slope = <code>{result['slope']:.4f}</code> mm/day, R² = <code>{result['r2']:.3f}</code>, Δ = <code>{result['delta']:.4f}</code>."
+                            f"</span></div>"
+                            f"<div style='margin-top:4px;'>"
+                            f"<b>Nominal:</b> {result.get('nominal','N/A')} &nbsp;&nbsp; "
+                            f"<b>LSL:</b> {result.get('lsl','N/A')} &nbsp;&nbsp; "
+                            f"<b>USL:</b> {result.get('usl','N/A')}"
+                            f"</div>"
+                            f"<span class='last-val-badge {last_badge_class}'>Last: {last_val:.4f}</span>"
+                        )
+
+                        if prox:
+                            summary_html += (
+                                f"<div style='margin-top:4px;'>"
+                                f"<b>Spec Check:</b> <span class='{prox[1]}'>{prox[0]}</span><br>"
+                                f"<i>{prox[2]}</i></div>"
+                            )
+
+                        summary_html += "</div>"
+                        st.markdown(summary_html, unsafe_allow_html=True)
 
 
 
@@ -830,15 +798,49 @@ with tabs[1]:
     import os
     from io import BytesIO
     import matplotlib.pyplot as plt
-    from openpyxl import Workbook
+    from openpyxl import Workbook, load_workbook
     from openpyxl.drawing.image import Image as XLImage
     from openpyxl.styles import PatternFill
     from matplotlib.patches import Rectangle
     import streamlit as st
     import numpy as np
+    import openpyxl
+    from openpyxl.utils import get_column_letter
 
     TREND_EXCEL = "trendchart.xlsx"
 
+    # ------------------ AUTO ADJUST COLUMNS FUNCTION ------------------
+    def auto_adjust_columns_excel(wb, sheet_names):
+        """
+        Adjust column widths for given sheets in an openpyxl workbook
+        """
+        for sheet_name in sheet_names:
+            if sheet_name not in wb.sheetnames:
+                continue
+            sheet = wb[sheet_name]
+
+            for i, col_cells in enumerate(sheet.iter_cols(1, sheet.max_column), start=1):
+                col_letter = get_column_letter(i)
+                max_length = 0
+                for cell in col_cells:
+                    if cell.value is None:
+                        continue
+                    cell_len = len(str(cell.value))
+                    if cell_len > max_length:
+                        max_length = cell_len
+
+                # Special adjustments for known long columns
+                header = sheet.cell(row=1, column=i).value
+                if header in ["Notes", "Image Path", "Batch Cleaning"]:
+                    adjusted_width = max(25, max_length + 2)  # long text
+                elif header in ["Measured Date", "Part In/Out", "Machine", "Part Type", "Chamber", "Hole", "Feature", "Status"]:
+                    adjusted_width = max(12, max_length + 2)
+                else:
+                    adjusted_width = max(15, max_length + 2)
+
+                sheet.column_dimensions[col_letter].width = min(adjusted_width, 50)  # cap max width
+
+    # ---------------- Update Trend Charts Button ----------------
     if st.button("Update Trend Charts"):
         if df_trend is None or df_trend.empty:
             st.warning("No measurement data available to generate trend charts.")
@@ -916,18 +918,16 @@ with tabs[1]:
 
                                 x_values = list(range(1, len(dfp)+1))
                                 y_values = dfp["Value"].astype(float)
-
                                 color = hole_colors_dict[hole]
+
                                 ax.plot(x_values, y_values, color=color, linewidth=2.2, label=f"{hole} Value", zorder=3)
                                 ax.scatter(x_values, y_values, color=color, s=65, edgecolors="white", linewidth=0.7, zorder=4)
 
-                                # Trend line
                                 if len(x_values) >= 2:
                                     z = np.polyfit(x_values, y_values, 1)
                                     p = np.poly1d(z)
                                     ax.plot(x_values, p(x_values), linestyle="--", color=color, alpha=0.7, label=f"{hole} Trend")
 
-                                # Horizontal spec lines (LSL/USL/Nominal)
                                 nominal_val = dfp["Nominal"].dropna().iloc[0] if "Nominal" in dfp.columns and not dfp["Nominal"].dropna().empty else None
                                 lsl_val = dfp["LSL"].dropna().iloc[0] if "LSL" in dfp.columns and not dfp["LSL"].dropna().empty else None
                                 usl_val = dfp["USL"].dropna().iloc[0] if "USL" in dfp.columns and not dfp["USL"].dropna().empty else None
@@ -939,28 +939,16 @@ with tabs[1]:
                                 if usl_val is not None:
                                     ax.axhline(usl_val, linestyle="--", color="green", linewidth=1.5, alpha=0.7)
 
-                                # Spec zone
                                 if lsl_val is not None and usl_val is not None and len(x_values) > 0:
                                     rect_x0 = x_values[0] - 0.5
                                     rect_width = x_values[-1] - x_values[0] + 1.0
                                     rect_y0 = lsl_val
                                     rect_height = usl_val - lsl_val
-                                    rect = Rectangle(
-                                        (rect_x0, rect_y0),
-                                        rect_width,
-                                        rect_height,
-                                        color="#d4f4dd",
-                                        alpha=0.35,
-                                        zorder=1,
-                                        ec="none",
-                                    )
+                                    rect = Rectangle((rect_x0, rect_y0), rect_width, rect_height, color="#d4f4dd", alpha=0.35, zorder=1, ec="none")
                                     ax.add_patch(rect)
 
-                                # Annotate last value
                                 ax.text(x_values[-1]+0.1, y_values.iloc[-1], f"{y_values.iloc[-1]:.2f}",
                                         fontsize=9, fontweight="bold", color=color, va="bottom", ha="left", zorder=5)
-
-                                # Axes & title
                                 ax.set_xlabel("Measurement Count", fontsize=10, color="#333333")
                                 ax.set_ylabel("Measurement (mm)", fontsize=10, color="#333333")
                                 ax.tick_params(colors="#333333", labelsize=9)
@@ -973,21 +961,29 @@ with tabs[1]:
                                 fig.savefig(chart_buf, dpi=200, format="png")
                                 plt.close(fig)
                                 chart_buf.seek(0)
-
                                 img = XLImage(chart_buf)
                                 img.width = fig_width * 90
                                 img.height = fig_height * 90
                                 img.anchor = f"A{current_row}"
                                 sheet.add_image(img)
-
                                 current_row += 5 + int(fig_height*4)
 
-                # Save workbook to buffer (no need to open Excel)
+
+                # ------------------ AUTO ADJUST ALL COLUMNS ------------------
+                try:
+                    auto_adjust_columns_excel(wb, wb.sheetnames)
+                except Exception as e:
+                    st.warning(f"Auto-adjust columns failed: {e}")
+
+                # --- Save workbook to disk ---
+                wb.save(TREND_EXCEL)
+
+                # --- Prepare download buffer ---
                 excel_buffer = BytesIO()
-                wb.save(excel_buffer)
+                wb_for_buffer = load_workbook(TREND_EXCEL)
+                wb_for_buffer.save(excel_buffer)
                 excel_buffer.seek(0)
 
-                # Provide download button for all users
                 st.download_button(
                     label="📥 Download Trend Charts (Excel)",
                     data=excel_buffer,
@@ -1001,22 +997,22 @@ with tabs[1]:
                 st.error(f"Failed to update trend charts: {e}")
 
 
-
-    # ---------------- Open Trend Excel ----------------
+    # ---------------- Open Trend Charts Button ----------------
     if st.button("Open Trend Charts"):
-        if os.path.exists(TREND_EXCEL):
+        trend_path = os.path.abspath(TREND_EXCEL)
+        if os.path.exists(trend_path):
             try:
-                os.startfile(TREND_EXCEL)  # Windows only
-                st.info("Excel file opened directly.")
+                os.startfile(trend_path)  # Windows only
+                st.info(f"Excel file opened directly: {trend_path}")
             except Exception as e:
                 st.warning(f"Could not open Excel automatically: {e}")
-                st.info("Please manually open 'trendchart.xlsx' from the project folder.")
+                st.info(f"Please manually open '{trend_path}' from the project folder.")
         else:
             st.warning("The trendchart.xlsx file does not exist yet. Please update the charts first.")
 
-# Define the path to save images
-IMAGE_DIR = "uploaded_images"
-os.makedirs(IMAGE_DIR, exist_ok=True)
+    # Define the path to save images
+    IMAGE_DIR = "uploaded_images"
+    os.makedirs(IMAGE_DIR, exist_ok=True)
 
 # ------------------ TAB 2: View & Manage Data ------------------
 with tabs[2]:
@@ -1039,24 +1035,32 @@ with tabs[2]:
         # 🔹 Remove any unnamed columns automatically
         df_view = df_view.loc[:, ~df_view.columns.str.contains("^Unnamed", case=False)]
 
-        # 🔹 Reorder Part In/Out column to appear right after Piece ID
+        # Reorder columns: Piece ID -> Part In/Out -> Batch Cleaning -> rest
         if "Piece ID" in df_view.columns and "Part In/Out" in df_view.columns:
             cols = list(df_view.columns)
+            if "Batch Cleaning" in cols:
+                cols.remove("Batch Cleaning")
             cols.remove("Part In/Out")
             idx = cols.index("Piece ID")
             cols.insert(idx + 1, "Part In/Out")
+            cols.insert(idx + 2, "Batch Cleaning")  # now Batch Cleaning is after Part In/Out
             df_view = df_view[cols]
 
-        # 🔹 FIX: Save df_view into session_state to auto-update trend chart
-        st.session_state["df_latest"] = df_view.copy()
+
+        # 🔹 Add Measured Date after Timestamp if exists
+        if "Timestamp" in df_view.columns and "Measured Date" in df_view.columns:
+            cols = list(df_view.columns)
+            cols.remove("Measured Date")
+            idx = cols.index("Timestamp")
+            cols.insert(idx + 1, "Measured Date")
+            df_view = df_view[cols]
 
     except PermissionError:
         st.error("❌ Excel file is currently open. Please **close the Excel file first** and refresh the page.")
         st.stop()
     except Exception as e:
         st.error(f"⚠️ Failed to load data: {e}")
-        df_view = pd.DataFrame(columns=DATA_COLS)
-        st.session_state["df_latest"] = df_view.copy()
+        df_view = pd.DataFrame(columns=DATA_COLS + ["Measured Date", "Batch Cleaning #"])
 
     import urllib.parse
     import base64
@@ -1291,9 +1295,10 @@ with tabs[2]:
         selected_row = df_view.iloc[edit_row]
         st.markdown(f"**Editing Row {edit_row_display}** — Piece ID: `{selected_row.get('Piece ID', 'N/A')}`")
 
+        # ---------- EDITABLE COLUMNS ----------
         editable_cols = [
-            "Machine", "Part Type", "Chamber", "Piece ID",
-            "Hole", "Feature", "Value", "Nominal", "LSL", "USL", "Status", "PartFlow", "Notes", "Image Path"
+            "Measured Date", "Batch Cleaning", "Machine", "Part Type", "Chamber", "Piece ID",
+            "Hole", "Feature", "Value", "Nominal", "LSL", "USL", "Status", "Part In/Out", "Notes", "Image Path"
         ]
         editable_cols = [c for c in editable_cols if c in df_view.columns]
 
@@ -1310,13 +1315,44 @@ with tabs[2]:
             new_entries = {}
             for col in editable_cols:
                 val = selected_row[col]
-                new_entries[col] = st.text_input(
-                    col,
-                    value="" if pd.isna(val) else str(val),
-                    key=f"edit_{col}"
-                )
 
-            # 🔹 Part In/Out selection
+                # Use date_input for Measured Date
+                if col == "Measured Date":
+                    try:
+                        if pd.isna(val) or val in ["", None]:
+                            date_val = datetime.now().date()  # default to today if empty/NaT
+                        else:
+                            date_val = pd.to_datetime(val).date()
+                    except Exception:
+                        date_val = datetime.now().date()
+                    new_entries[col] = st.date_input(
+                        "Measured Date",
+                        value=date_val,
+                        key=f"edit_{col}"
+                    )
+
+                # Use number_input for Batch Cleaning
+                elif col == "Batch Cleaning":
+                    try:
+                        batch_val = float(val) if val != "" else 0
+                    except:
+                        batch_val = 0
+                    new_entries[col] = st.number_input(
+                        "Batch Cleaning (optional)",
+                        value=batch_val,
+                        min_value=0.0,
+                        step=1.0,
+                        format="%.0f",
+                        key=f"edit_{col}"
+                    )
+                else:
+                    new_entries[col] = st.text_input(
+                        col,
+                        value="" if pd.isna(val) else str(val),
+                        key=f"edit_{col}"
+                    )
+
+            # 🔹 NEW: Part In/Out selection (already in editable_cols)
             part_inout_val = selected_row.get("Part In/Out", "IN")
             edit_part_inout = st.selectbox(
                 "Part In/Out",
@@ -1324,8 +1360,8 @@ with tabs[2]:
                 index=0 if str(part_inout_val).upper() == "IN" else 1
             )
 
-            # Hole image upload
-            hole_type = selected_row.get('Hole', 'N/A')
+            # Check for Hole Image Path Upload
+            hole_type = selected_row.get('Hole', 'N/A')  # Get the hole type (e.g., H1, H2)
             hole_image = st.file_uploader(f"Upload Image for Hole {hole_type}", type=["png", "jpg", "jpeg"], key=f"hole_{hole_type}")
 
             if hole_image:
@@ -1346,8 +1382,12 @@ with tabs[2]:
         if save_clicked:
             df_upd = df_view.copy()
             for col, txt in new_entries.items():
-                txt_str = "" if txt is None else str(txt).strip()
-                if col in ["Value", "Nominal", "LSL", "USL"]:
+                if col == "Measured Date":
+                    df_upd.at[edit_row, col] = txt.strftime("%Y-%m-%d")  # just date
+                elif col == "Batch Cleaning":
+                    df_upd.at[edit_row, col] = txt if txt != 0 else ""
+                elif col in ["Value", "Nominal", "LSL", "USL"]:
+                    txt_str = "" if txt is None else str(txt).strip()
                     if txt_str == "":
                         df_upd.at[edit_row, col] = pd.NA
                     else:
@@ -1356,28 +1396,30 @@ with tabs[2]:
                         except Exception:
                             df_upd.at[edit_row, col] = txt_str
                 else:
-                    df_upd.at[edit_row, col] = txt_str
+                    df_upd.at[edit_row, col] = txt
 
-            # Save Part In/Out
+            # 🔹 Save Part In/Out selection
             df_upd.at[edit_row, "Part In/Out"] = edit_part_inout
 
-            # Keep column order same
+            # 🔹 Keep column order same: Piece ID → Part In/Out → Batch Cleaning → rest
             if "Piece ID" in df_upd.columns and "Part In/Out" in df_upd.columns:
                 cols = list(df_upd.columns)
-                cols.remove("Part In/Out")
+                if "Part In/Out" in cols:
+                    cols.remove("Part In/Out")
                 idx = cols.index("Piece ID")
                 cols.insert(idx + 1, "Part In/Out")
+                # Insert Batch Cleaning right after Part In/Out
+                if "Batch Cleaning" in cols:
+                    cols.remove("Batch Cleaning")
+                idx_part = cols.index("Part In/Out")
+                cols.insert(idx_part + 1, "Batch Cleaning")
                 df_upd = df_upd[cols]
 
             df_upd = df_upd.loc[:, ~df_upd.columns.str.contains("^Unnamed", case=False)]
 
             try:
-                # Save to Excel
                 with pd.ExcelWriter(EXCEL, mode="a", engine="openpyxl", if_sheet_exists="replace") as writer:
                     df_upd.to_excel(writer, sheet_name=sheet_name, index=False)
-
-                # 🔹 FIX: Update session_state so trend chart uses latest saved data
-                st.session_state["df_latest"] = df_upd.copy()
 
                 st.success(f"✅ Row {edit_row_display} updated successfully in Excel and table.")
                 st.toast(f"Row {edit_row_display} updated successfully ✅", icon="✅")
