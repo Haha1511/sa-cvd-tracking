@@ -48,32 +48,51 @@ DATA_COLS = [
 SPECS_COLS = ["Part Type", "Hole", "Feature", "Nominal", "LSL", "USL", "Tolerance"]
 
 # ---------- Utilities ----------
-def atomic_write_all(filename, sheets_dict):
-    fd, tmp = tempfile.mkstemp(suffix=".xlsx")
-    os.close(fd)
-    try:
-        with pd.ExcelWriter(tmp, engine="openpyxl") as w:
-            for sheet_name, df in sheets_dict.items():
-                df.to_excel(w, sheet_name=sheet_name, index=False)
-        os.replace(tmp, filename)
-        return filename, None
-    except PermissionError:
-        try: os.remove(tmp)
-        except: pass
-        alt = f"{os.path.splitext(filename)[0]}_LOCKED_{datetime.now().strftime('%Y%m%d%H%M%S')}.xlsx"
+def atomic_write_all(excel_file, sheets_dict, return_bytesio=False):
+    """
+    Save all sheets safely. If return_bytesio=True, return in-memory Excel file instead of disk.
+    """
+    import tempfile
+    from openpyxl import Workbook
+
+    if return_bytesio:
+        mem_file = BytesIO()
+        wb = Workbook()
+        # Remove default sheet if exists
+        if "Sheet" in wb.sheetnames:
+            wb.remove(wb["Sheet"])
+
+        for sheet_name, df in sheets_dict.items():
+            ws = wb.create_sheet(title=sheet_name)
+            # Write header
+            ws.append(list(df.columns))
+            # Write rows
+            for row in df.itertuples(index=False):
+                ws.append(list(row))
+        wb.save(mem_file)
+        mem_file.seek(0)
+        return True, "Saved in-memory", mem_file
+    else:
+        # Original on-disk behavior
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+            tmp_name = tmp.name
         try:
-            with pd.ExcelWriter(alt, engine="openpyxl") as w:
-                for sheet_name, df in sheets_dict.items():
-                    df.to_excel(w, sheet_name=sheet_name, index=False)
-            return None, alt
-        except Exception:
-            try: os.remove(alt)
-            except: pass
-            return None, None
-    except Exception:
-        try: os.remove(tmp)
-        except: pass
-        return None, None
+            wb = Workbook()
+            if "Sheet" in wb.sheetnames:
+                wb.remove(wb["Sheet"])
+            for sheet_name, df in sheets_dict.items():
+                ws = wb.create_sheet(title=sheet_name)
+                ws.append(list(df.columns))
+                for row in df.itertuples(index=False):
+                    ws.append(list(row))
+            wb.save(tmp_name)
+            # Atomic replace
+            import os
+            os.replace(tmp_name, excel_file)
+            return True, None
+        except Exception as e:
+            return False, str(e)
+
 
 def read_sheet_safe(sheet_name):
     if not os.path.exists(EXCEL):
