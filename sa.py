@@ -309,14 +309,15 @@ def _status_from_value(part, hole, feat, val):
     except Exception:
         return ("PASS" if val is not None else "FAIL", None, None, None)
 
-def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements, measured_date=None, batch_number=None, timestamp=None, return_bytesio=False, save_path=None):
+def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements,
+                         measured_date=None, batch_number=None, timestamp=None,
+                         return_bytesio=False, save_path=None):
     ensure_workbook()
     ts = timestamp if timestamp is not None else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     df_part = read_sheet_safe(SHEET_MB if part == "Mixing Block" else SHEET_GW)
     df_other = read_sheet_safe(SHEET_GW if part == "Mixing Block" else SHEET_MB)
     df_specs = read_sheet_safe(SHEET_SPECS)
 
-    # Format measured date
     if measured_date is None:
         measured_date_str = datetime.now().strftime("%Y-%m-%d")
     else:
@@ -334,7 +335,6 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
             val = None
         status, nominal, lsl, usl = _status_from_value(part, hole, feat, val if val is not None else 0.0)
 
-        # Add image path if exists
         img_path = m.get("ImagePath", None)
 
         rows.append({
@@ -343,7 +343,7 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
             "Machine": machine,
             "Part Type": part,
             "Part In/Out": part_flow,
-            "Batch Cleaning": batch_number if batch_number is not None else "",
+            "Batch Cleaning": batch_number if batch_number else "",
             "Chamber": chamber,
             "Piece ID": piece_id,
             "Hole": f"H{hole}",
@@ -373,11 +373,11 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
         SHEET_SPECS: df_specs
     }
 
-    # ----------------- Save Excel -----------------
+    # ----------------- Save Excel normally -----------------
+    saved, alt = atomic_write_all(EXCEL, sheets)  # <-- no extra parameter
+
+    # ----------------- Memory file for download -----------------
     mem_file = None
-    saved, alt = atomic_write_all(EXCEL, sheets, return_bytesio=return_bytesio)
-    
-    # If return_bytesio, get memory file
     if return_bytesio:
         from io import BytesIO
         mem_file = BytesIO()
@@ -386,21 +386,12 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
         mem_file.seek(0)
 
-    # Save persistent copy for other tabs
+    # ----------------- Persistent save for other tabs -----------------
     if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
         with pd.ExcelWriter(save_path, engine='openpyxl') as writer:
             for sheet_name, df in sheets.items():
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
-
-    if saved:
-        try:
-            add_reference_image()
-        except:
-            pass
-        try:
-            apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
-        except:
-            pass
 
     return saved, "Saved successfully", mem_file
 
