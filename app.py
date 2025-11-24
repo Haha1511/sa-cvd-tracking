@@ -229,7 +229,7 @@ if "save_flash" not in st.session_state:
 with tabs[0]:
     st.subheader("Add Measurement")
 
-    st.info("💡 On Streamlit Cloud, Excel is saved in memory; no need to open/close files locally.")
+    st.info("💡 Please make sure to close the Excel file before performing any actions.")
 
     # ---------------- SESSION STATE FOR AUTO-CLEAR ----------------
     if "clear_meas" not in st.session_state:
@@ -271,14 +271,17 @@ with tabs[0]:
         piece_id = st.text_input("Piece ID / Serial Number")
         st.markdown('</div>', unsafe_allow_html=True)
 
+        # ---------------- TIMESTAMP ----------------
         st.markdown('<div class="highlight-wrapper">', unsafe_allow_html=True)
         measured_date = st.date_input("Measured Date", value=datetime.now())
         st.markdown('</div>', unsafe_allow_html=True)
 
+        # ---------------- PART IN / OUT ----------------
         st.markdown('<div class="highlight-wrapper">', unsafe_allow_html=True)
         part_flow = st.selectbox("Part Status (IN = returned, OUT = sent)", ["IN", "OUT"])
         st.markdown('</div>', unsafe_allow_html=True)
 
+        # ---------------- BATCH CLEANING NUMBER ----------------
         st.markdown('<div class="highlight-wrapper">', unsafe_allow_html=True)
         batch_number = st.text_input("Batch Cleaning Number (optional)")
         st.markdown('</div>', unsafe_allow_html=True)
@@ -295,7 +298,6 @@ with tabs[0]:
         col_idx = 0
         for h in holes:
             with cols_in[col_idx]:
-
                 st.markdown('<div class="highlight-wrapper">', unsafe_allow_html=True)
                 st.markdown(f"**H{h}**")
 
@@ -306,7 +308,6 @@ with tabs[0]:
                     inputs.append({"Hole": str(h), "Feature": f, "Value": val})
 
                 st.markdown('</div>', unsafe_allow_html=True)
-
             col_idx = (col_idx + 1) % 3
 
         # ======================================================
@@ -374,7 +375,7 @@ with tabs[0]:
                 st.warning(f"Invalid number for H{it['Hole']} {it['Feature']}: '{raw}' — skipped")
 
         # Attach all pending photos to corresponding measurements
-        os.makedirs("data/uploaded_images", exist_ok=True)  # Streamlit Cloud writable folder
+        os.makedirs("data/uploaded_images", exist_ok=True)
         for p in st.session_state.pending_photos_list:
             hole = p["hole"]
             feature = p["feature"]
@@ -391,8 +392,8 @@ with tabs[0]:
                 if m["Hole"] == hole and m["Feature"].lower() == feature.lower():
                     m["ImagePath"] = img_path
 
-        st.session_state.pending_photos_list = []  # clear after attaching
-        st.session_state.photo_counter = 0  # reset counter
+        st.session_state.pending_photos_list = []
+        st.session_state.photo_counter = 0
 
         if not piece_id:
             st.error("Piece ID / Serial Number is required.")
@@ -401,9 +402,9 @@ with tabs[0]:
         else:
             # ✅ Use memory-saving version for Streamlit Cloud
             ok, msg, mem_file = add_measurement_rows(
-                part, machine, chamber, piece_id, part_flow, notes, 
+                part, machine, chamber, piece_id, part_flow, notes,
                 measurements, measured_date=measured_date, batch_number=batch_number,
-                return_bytesio=True  # <-- key change for cloud
+                return_bytesio=True
             )
 
             if ok:
@@ -416,18 +417,17 @@ with tabs[0]:
                 st.session_state.form_key = f"form_add_{st.session_state.form_counter}"
                 st.session_state.form_counter += 1
 
-                # Only store success message here
                 st.session_state["pending_success"] = f"✅ Saved to memory. ({msg}) — {now}"
 
                 if "analysis_cache" in st.session_state:
                     st.session_state["analysis_cache"].pop((part,), None)
 
-                # ✅ Add download button if memory file exists
+                # ✅ Add download button for Streamlit Cloud
                 if mem_file:
                     st.download_button(
-                        label="📥 Download Excel File",
+                        label="📥 Download Excel",
                         data=mem_file,
-                        file_name="SA_Machine_Data.xlsx",
+                        file_name=f"{piece_id}_SA_Measurements.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
 
@@ -435,12 +435,10 @@ with tabs[0]:
             else:
                 st.error(f"❌ Failed to save measurements: {msg}")
 
-        # ---------------- SHOW SUCCESS MESSAGE AT BOTTOM ----------------
-        if "pending_success" in st.session_state:
-            st.success(st.session_state["pending_success"])
-            del st.session_state["pending_success"]
-
-
+    # ---------------- SHOW SUCCESS MESSAGE AT BOTTOM ----------------
+    if "pending_success" in st.session_state:
+        st.success(st.session_state["pending_success"])
+        del st.session_state["pending_success"]
 
 
 # ------------------ TAB 1: Trend Chart (with Analysis) ------------------
