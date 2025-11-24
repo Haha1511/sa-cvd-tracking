@@ -1102,57 +1102,57 @@ with tabs[2]:
         st.stop()
     except Exception as e:
         st.error(f"⚠️ Failed to load data: {e}")
-        df_view = pd.DataFrame(columns=DATA_COLS + ["Measured Date", "Batch Cleaning #"])
+    df_view = pd.DataFrame(columns=DATA_COLS + ["Measured Date", "Batch Cleaning #"])
     import urllib.parse
     import base64
 
      # ===================== DISPLAY TABLE =====================
-        if df_view.empty:
-            st.info("No records found.")
-        else:
-            df_display = df_view.copy()
-            df_display.index = df_display.index + 1
+    if df_view.empty:
+        st.info("No records found.")
+    else:
+        df_display = df_view.copy()
+        df_display.index = df_display.index + 1
 
-            html = """<style>/* CSS omitted for brevity */</style><table class="custom-table"><thead><tr>"""
-            html += "<th>Row</th>" + "".join(f"<th>{col}</th>" for col in df_display.columns) + "</tr></thead><tbody>"
+        html = """<style>/* CSS omitted for brevity */</style><table class="custom-table"><thead><tr>"""
+        html += "<th>Row</th>" + "".join(f"<th>{col}</th>" for col in df_display.columns) + "</tr></thead><tbody>"
 
-            for i in range(len(df_display)):
-                row = df_display.iloc[i]
-                row_class = ""
-                if i > 0 and "Piece ID" in df_display.columns:
-                    prev_id = df_display.iloc[i - 1]["Piece ID"]
-                    curr_id = row["Piece ID"]
-                    if str(curr_id).strip() != str(prev_id).strip():
-                        row_class = "separator"
-                html += f"<tr class='{row_class}'>"
-                html += f"<td><b>{i+1}</b></td>"
+        for i in range(len(df_display)):
+            row = df_display.iloc[i]
+            row_class = ""
+            if i > 0 and "Piece ID" in df_display.columns:
+                prev_id = df_display.iloc[i - 1]["Piece ID"]
+                curr_id = row["Piece ID"]
+                if str(curr_id).strip() != str(prev_id).strip():
+                    row_class = "separator"
+            html += f"<tr class='{row_class}'>"
+            html += f"<td><b>{i+1}</b></td>"
 
-                for col in df_display.columns:
-                    val = row[col]
-                    val = "" if pd.isna(val) else val
-                    cell_class = ""
-                    if col.lower() == "status":
-                        if str(val).strip().lower() == "pass":
-                            cell_class = "pass"
-                        elif str(val).strip().lower() == "fail":
-                            cell_class = "fail"
-                    if col == "Image Path" and val != "":
-                        img_path = val.strip()
-                        if os.path.exists(img_path):
-                            with open(img_path, "rb") as f:
-                                data = f.read()
-                                ext = os.path.splitext(img_path)[1].lower()
-                                mime = "jpeg" if ext in [".jpg", ".jpeg"] else "png"
-                                encoded = base64.b64encode(data).decode()
-                            img_html = f"<td class='{cell_class}'><img src='data:image/{mime};base64,{encoded}' class='image-cell'/></td>"
-                        else:
-                            img_html = f"<td class='{cell_class}'> </td>"
-                        html += img_html
+            for col in df_display.columns:
+                val = row[col]
+                val = "" if pd.isna(val) else val
+                cell_class = ""
+                if col.lower() == "status":
+                    if str(val).strip().lower() == "pass":
+                        cell_class = "pass"
+                    elif str(val).strip().lower() == "fail":
+                        cell_class = "fail"
+                if col == "Image Path" and val != "":
+                    img_path = val.strip()
+                    if os.path.exists(img_path):
+                        with open(img_path, "rb") as f:
+                            data = f.read()
+                            ext = os.path.splitext(img_path)[1].lower()
+                            mime = "jpeg" if ext in [".jpg", ".jpeg"] else "png"
+                            encoded = base64.b64encode(data).decode()
+                        img_html = f"<td class='{cell_class}'><img src='data:image/{mime};base64,{encoded}' class='image-cell'/></td>"
                     else:
-                        html += f"<td class='{cell_class}'>{val}</td>"
-                html += "</tr>"
-            html += "</tbody></table>"
-            st.markdown(html, unsafe_allow_html=True)
+                        img_html = f"<td class='{cell_class}'> </td>"
+                    html += img_html
+                else:
+                    html += f"<td class='{cell_class}'>{val}</td>"
+            html += "</tr>"
+        html += "</tbody></table>"
+        st.markdown(html, unsafe_allow_html=True)
 
 
         # ---------- Build HTML Table ----------
