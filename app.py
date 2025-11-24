@@ -359,11 +359,6 @@ with tabs[0]:
         # ================= Form submit button =================
         submitted = st.form_submit_button("Save Measurements")
 
-    # ---------------- AFTER FORM CREATION ----------------
-    if st.session_state.get("clear_active", False):
-        st.session_state.clear_meas = False
-        st.session_state.clear_active = False
-
     # ---------------- AFTER SUBMIT LOGIC ----------------
     if submitted:
         measurements = []
@@ -425,25 +420,27 @@ with tabs[0]:
                 if "analysis_cache" in st.session_state:
                     st.session_state["analysis_cache"].pop((part,), None)
 
-                # -------------------- ADD DOWNLOAD BUTTON --------------------
+                # ✅ Save mem_file in session for download after rerun
                 if mem_file:
-                    mem_file.seek(0)  # Reset pointer
-                    st.download_button(
-                        label="📥 Download Excel",
-                        data=mem_file,
-                        file_name=f"SA_Machine_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
+                    mem_file.seek(0)
+                    st.session_state["excel_mem_file"] = mem_file
 
                 st.rerun()
             else:
                 st.error(f"❌ Failed to save measurements: {msg}")
 
-    # ---------------- SHOW SUCCESS MESSAGE AT BOTTOM ----------------
+    # ---------------- SHOW SUCCESS MESSAGE + DOWNLOAD BUTTON OUTSIDE FORM ----------------
     if "pending_success" in st.session_state:
         st.success(st.session_state["pending_success"])
         del st.session_state["pending_success"]
 
+    if "excel_mem_file" in st.session_state:
+        st.download_button(
+            label="📥 Download Excel",
+            data=st.session_state["excel_mem_file"],
+            file_name=f"SA_Machine_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 # ------------------ TAB 1: Trend Chart (with Analysis) ------------------
 with tabs[1]:
