@@ -391,7 +391,10 @@ def add_measurement_rows(
     }
 
     # Use atomic_write_all if you want, else just write to memory
-    saved, alt = atomic_write_all(EXCEL, sheets, return_bytesio=return_bytesio)
+    if return_bytesio:
+        saved, alt, mem_file = atomic_write_all(EXCEL, sheets, return_bytesio=True)
+    else:
+        saved, alt = atomic_write_all(EXCEL, sheets)
 
     if saved:
         try:
