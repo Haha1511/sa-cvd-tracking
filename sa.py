@@ -309,22 +309,8 @@ def _status_from_value(part, hole, feat, val):
     except Exception:
         return ("PASS" if val is not None else "FAIL", None, None, None)
 
-def add_measurement_rows(
-    part, machine, chamber, piece_id, part_flow, notes, measurements,
-    measured_date=None, batch_number=None, timestamp=None, return_bytesio=False
-):
-    """
-    Add measurement rows to the Excel workbook.
-
-    If return_bytesio=True, workbook is saved to memory (BytesIO) instead of disk.
-    """
-    from io import BytesIO
-    import pandas as pd
-    from datetime import datetime
-    import os
-    import openpyxl
-    from openpyxl.utils import get_column_letter
-
+def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements,
+                         measured_date=None, batch_number=None, timestamp=None, return_bytesio=False):
     ensure_workbook()
     ts = timestamp if timestamp is not None else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     df_part = read_sheet_safe(SHEET_MB if part == "Mixing Block" else SHEET_GW)
@@ -335,12 +321,10 @@ def add_measurement_rows(
     if measured_date is None:
         measured_date_str = datetime.now().strftime("%Y-%m-%d")
     else:
+        measured_date_str = str(measured_date)
         if isinstance(measured_date, datetime):
             measured_date_str = measured_date.strftime("%Y-%m-%d")
-        else:
-            measured_date_str = str(measured_date)
 
-    # Prepare rows
     rows = []
     for m in measurements:
         hole = str(m.get("Hole")).lstrip("H")
@@ -349,11 +333,8 @@ def add_measurement_rows(
             val = float(m.get("Value"))
         except:
             val = None
-
         status, nominal, lsl, usl = _status_from_value(part, hole, feat, val if val is not None else 0.0)
-
         img_path = m.get("ImagePath", None)
-
         rows.append({
             "Timestamp": ts,
             "Measured Date": measured_date_str,
@@ -390,68 +371,24 @@ def add_measurement_rows(
         SHEET_SPECS: df_specs
     }
 
-    # Use atomic_write_all if you want, else just write to memory
+    # -------------------- SAVE TO MEMORY IF REQUESTED --------------------
     if return_bytesio:
-        saved, alt, mem_file = atomic_write_all(EXCEL, sheets, return_bytesio=True)
-    else:
-        saved, alt = atomic_write_all(EXCEL, sheets)
+        mem_file = BytesIO()
+        with pd.ExcelWriter(mem_file, engine="openpyxl") as writer:
+            for sheet_name, df in sheets.items():
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+            writer.save()
+        mem_file.seek(0)
+        return True, "Saved to memory", mem_file
 
+    # -------------------- FALLBACK: Save to disk (optional) --------------------
+    saved, alt = atomic_write_all(EXCEL, sheets)
     if saved:
-        try:
-            add_reference_image()
-        except:
-            pass
-        try:
-            apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
-        except:
-            pass
-
-        # Open workbook for column auto-adjust
-        if return_bytesio:
-            mem_file = BytesIO()
-            wb = openpyxl.load_workbook(EXCEL)  # load current saved Excel (atomic_write_all may also return BytesIO)
-        else:
-            wb = openpyxl.load_workbook(EXCEL)
-
-        # ------------------ AUTO ADJUST COLUMNS ------------------
-        for sheet_name in [SHEET_MB, SHEET_GW]:
-            if sheet_name not in wb.sheetnames:
-                continue
-            sheet = wb[sheet_name]
-            for i, col_cells in enumerate(sheet.iter_cols(1, sheet.max_column), start=1):
-                col_letter = get_column_letter(i)
-                max_length = 0
-                for cell in col_cells:
-                    if cell.value is None:
-                        continue
-                    cell_len = len(str(cell.value))
-                    if cell_len > max_length:
-                        max_length = cell_len
-
-                header = sheet.cell(row=1, column=i).value
-                if header in ["Notes", "Image Path", "Batch Cleaning"]:
-                    adjusted_width = max(25, max_length + 2)
-                elif header in ["Measured Date", "Part In/Out", "Machine", "Part Type", "Chamber", "Hole", "Feature", "Status"]:
-                    adjusted_width = max(12, max_length + 2)
-                else:
-                    adjusted_width = max(15, max_length + 2)
-
-                sheet.column_dimensions[col_letter].width = min(adjusted_width, 50)
-
-        # ------------------ SAVE WORKBOOK ------------------
-        if return_bytesio:
-            mem_file = BytesIO()
-            wb.save(mem_file)
-            mem_file.seek(0)
-            return True, "Saved to memory", mem_file
-        else:
-            wb.save(EXCEL)
-            return True, "Saved to disk", None
+        return True, "Saved to disk", None
     elif alt:
         return False, f"Excel locked — saved clone to: {alt}", None
     else:
         return False, "Failed to save measurements", None
-
     
 def get_available_holes_for_part(part):
     """Return hole list depending on part type."""
