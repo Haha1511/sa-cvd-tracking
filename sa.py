@@ -1,3 +1,5 @@
+from io import BytesIO
+
 import streamlit as st
 import base64 
 from datetime import datetime
