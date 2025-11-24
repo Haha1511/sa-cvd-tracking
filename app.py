@@ -1054,20 +1054,25 @@ with tabs[1]:
 
 # ------------------ TAB 2: View & Manage Data ------------------
 
-# ---------- Helper function ----------
+import pandas as pd
+import os
+
 def read_sheet_safe(sheet_name):
-    """Safely read a sheet from EXCEL. Returns empty DataFrame if sheet does not exist."""
-    import os
-    import pandas as pd
-    if os.path.exists(EXCEL):
-        try:
-            df = pd.read_excel(EXCEL, sheet_name=sheet_name)
-            return df
-        except Exception as e:
-            print(f"Failed to read sheet {sheet_name}: {e}")
-            return pd.DataFrame()
-    else:
+    """
+    Safely read a sheet from the Excel file.
+    Returns empty DataFrame if file/sheet does not exist.
+    """
+    if not os.path.exists(EXCEL):
+        return pd.DataFrame()  # return empty if file does not exist
+    try:
+        df = pd.read_excel(EXCEL, sheet_name=sheet_name)
+        # Remove any unnamed columns automatically
+        df = df.loc[:, ~df.columns.str.contains("^Unnamed", case=False)]
+        return df
+    except Exception as e:
+        print(f"Failed to read sheet {sheet_name}: {e}")
         return pd.DataFrame()
+
 
 
 with tabs[2]:
