@@ -376,14 +376,14 @@ with tabs[0]:
                 st.warning(f"Invalid number for H{it['Hole']} {it['Feature']}: '{raw}' — skipped")
 
         # Attach all pending photos to corresponding measurements
+        os.makedirs("data/uploaded_images", exist_ok=True)  # Streamlit Cloud writable folder
         for p in st.session_state.pending_photos_list:
             hole = p["hole"]
             feature = p["feature"]
             file = p["file"]
 
-            os.makedirs("uploaded_images", exist_ok=True)
             img_filename = f"{piece_id}_H{hole}_{feature}.jpg"
-            img_path = os.path.join("uploaded_images", img_filename)
+            img_path = os.path.join("data/uploaded_images", img_filename)
 
             with open(img_path, "wb") as f:
                 f.write(file.getbuffer())
@@ -451,6 +451,7 @@ with tabs[1]:
         # Use Measured Date instead of Timestamp
         df_trend["Measured Date"] = pd.to_datetime(df_trend["Measured Date"], errors="coerce").dt.date
         df_trend = df_trend.dropna(subset=["Measured Date"])
+
 
         # Machine filter
         machines = ["All"] + sorted(df_trend["Machine"].dropna().unique().tolist())
@@ -956,27 +957,61 @@ with tabs[1]:
                                 ax.legend(fontsize=8, loc="upper left")
                                 plt.tight_layout()
 
-                                # Save chart to buffer & insert into Excel
-                                chart_buf = BytesIO()
-                                fig.savefig(chart_buf, dpi=200, format="png")
+                                # Save figure temporarily to a PNG file and insert into Excel
+                                tmp_img_path = f"tmp_chart_{part}_{hole}_{feat}.png".replace(" ", "_")
+                                fig.savefig(tmp_img_path, dpi=200)
                                 plt.close(fig)
-                                chart_buf.seek(0)
-                                img = XLImage(chart_buf)
-                                img.width = fig_width * 90
-                                img.height = fig_height * 90
-                                img.anchor = f"A{current_row}"
+                                img = XLImage(tmp_img_path)
+                                img.anchor = f"A{current_row+1}"
                                 sheet.add_image(img)
-                                current_row += 5 + int(fig_height*4)
+                                current_row += 20  # leave enough space for chart in sheet
 
 
-                # ------------------ AUTO ADJUST ALL COLUMNS ------------------
-                try:
-                    auto_adjust_columns_excel(wb, wb.sheetnames)
-                except Exception as e:
-                    st.warning(f"Auto-adjust columns failed: {e}")
+                    from openpyxl.utils import get_column_letter  # put this at the top with other imports
 
-                # --- Save workbook to disk ---
-                wb.save(TREND_EXCEL)
+                    # ------------------ AUTO ADJUST ALL COLUMNS FUNCTION ------------------
+                    def auto_adjust_columns_excel(wb, sheet_names):
+                        for sheet_name in sheet_names:
+                            if sheet_name not in wb.sheetnames:
+                                continue
+                            sheet = wb[sheet_name]
+                            for i, col_cells in enumerate(sheet.iter_cols(1, sheet.max_column), start=1):
+                                col_letter = get_column_letter(i)
+                                max_length = 0
+                                for cell in col_cells:
+                                    if cell.value is None:
+                                        continue
+                                    cell_len = len(str(cell.value))
+                                    if cell_len > max_length:
+                                        max_length = cell_len
+                                # Adjust width based on header or content
+                                header = sheet.cell(row=1, column=i).value
+                                if header in ["Notes", "Image Path", "Batch Cleaning"]:
+                                    adjusted_width = max(25, max_length + 2)
+                                elif header in ["Measured Date", "Part In/Out", "Machine", "Part Type", "Chamber", "Hole", "Feature", "Status"]:
+                                    adjusted_width = max(12, max_length + 2)
+                                else:
+                                    adjusted_width = max(15, max_length + 2)
+                                sheet.column_dimensions[col_letter].width = min(adjusted_width, 50)
+
+                    # ------------------ AUTO ADJUST COLUMNS ------------------
+                    try:
+                        auto_adjust_columns_excel(wb, wb.sheetnames)
+                    except Exception as e:
+                        st.warning(f"Auto-adjust columns failed: {e}")
+
+                    # ------------------ SAFELY SAVE WORKBOOK ------------------
+                    if os.path.exists(TREND_EXCEL):
+                        try:
+                            os.remove(TREND_EXCEL)  # remove old file if exists
+                        except PermissionError:
+                            st.error("❌ Failed to save. Please make sure Excel file is closed before updating.")
+                            st.stop()
+
+                    wb.save(TREND_EXCEL)
+
+
+
 
                 # --- Prepare download buffer ---
                 excel_buffer = BytesIO()
