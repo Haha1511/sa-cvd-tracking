@@ -300,7 +300,7 @@ def add_measurement_rows(
     df_other = read_sheet_safe(SHEET_GW if part == "Mixing Block" else SHEET_MB)
     df_specs = read_sheet_safe(SHEET_SPECS)
 
-    # Format measured date to only YYYY-MM-DD
+    # Format measured date
     if measured_date is None:
         measured_date_str = datetime.now().strftime("%Y-%m-%d")
     else:
@@ -317,8 +317,6 @@ def add_measurement_rows(
         except:
             val = None
         status, nominal, lsl, usl = _status_from_value(part, hole, feat, val if val is not None else 0.0)
-
-        # ⭐ Add image path if exists in measurement dict
         img_path = m.get("ImagePath", None)
 
         rows.append({
@@ -357,67 +355,60 @@ def add_measurement_rows(
         SHEET_SPECS: df_specs
     }
 
-    # ---------------- SAVE TO MEMORY OR FILE ----------------
-    if return_bytesio:
-        # Save workbook to BytesIO for Streamlit Cloud
-        mem_file = BytesIO()
-        with pd.ExcelWriter(mem_file, engine="openpyxl") as writer:
-            for sheet_name, df in sheets.items():
-                df.to_excel(writer, sheet_name=sheet_name, index=False)
-        mem_file.seek(0)
-        return True, "Saved in memory", mem_file
-    else:
-        saved, alt = atomic_write_all(EXCEL, sheets)
-        if saved:
-            try:
-                add_reference_image()
-            except:
-                pass
-            try:
-                apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
-            except:
-                pass
+    # Use atomic write function
+    saved, alt = atomic_write_all(EXCEL, sheets)
+    if saved:
+        try:
+            add_reference_image()
+        except:
+            pass
+        try:
+            apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
+        except:
+            pass
 
-            import openpyxl
-            from openpyxl.utils import get_column_letter
+        import openpyxl
+        from openpyxl.utils import get_column_letter
 
-            # ------------------ AUTO ADJUST COLUMNS ------------------
-            def auto_adjust_columns(excel_file, sheet_names):
-                wb = openpyxl.load_workbook(excel_file)
-                for sheet_name in sheet_names:
-                    if sheet_name not in wb.sheetnames:
-                        continue
-                    sheet = wb[sheet_name]
+        def auto_adjust_columns(wb):
+            for sheet_name in wb.sheetnames:
+                sheet = wb[sheet_name]
+                for i, col_cells in enumerate(sheet.iter_cols(1, sheet.max_column), start=1):
+                    col_letter = get_column_letter(i)
+                    max_length = 0
+                    for cell in col_cells:
+                        if cell.value is None:
+                            continue
+                        cell_len = len(str(cell.value))
+                        if cell_len > max_length:
+                            max_length = cell_len
+                    header = sheet.cell(row=1, column=i).value
+                    if header in ["Notes", "Image Path", "Batch Cleaning"]:
+                        adjusted_width = max(25, max_length + 2)
+                    elif header in ["Measured Date", "Part In/Out", "Machine", "Part Type", "Chamber", "Hole", "Feature", "Status"]:
+                        adjusted_width = max(12, max_length + 2)
+                    else:
+                        adjusted_width = max(15, max_length + 2)
+                    sheet.column_dimensions[col_letter].width = min(adjusted_width, 50)
 
-                    for i, col_cells in enumerate(sheet.iter_cols(1, sheet.max_column), start=1):
-                        col_letter = get_column_letter(i)
-                        max_length = 0
-                        for cell in col_cells:
-                            if cell.value is None:
-                                continue
-                            cell_len = len(str(cell.value))
-                            if cell_len > max_length:
-                                max_length = cell_len
-
-                        header = sheet.cell(row=1, column=i).value
-                        if header in ["Notes", "Image Path", "Batch Cleaning"]:
-                            adjusted_width = max(25, max_length + 2)
-                        elif header in ["Measured Date", "Part In/Out", "Machine", "Part Type", "Chamber", "Hole", "Feature", "Status"]:
-                            adjusted_width = max(12, max_length + 2)
-                        else:
-                            adjusted_width = max(15, max_length + 2)
-
-                        sheet.column_dimensions[col_letter].width = min(adjusted_width, 50)
-
-                wb.save(excel_file)
-
-            auto_adjust_columns(EXCEL, [SHEET_MB, SHEET_GW])
-            return True, saved, None
-        elif alt:
-            return False, f"Excel locked — saved clone to: {alt}", None
+        if return_bytesio:
+            # Save to memory
+            mem_file = BytesIO()
+            wb = openpyxl.load_workbook(EXCEL)
+            auto_adjust_columns(wb)
+            wb.save(mem_file)
+            mem_file.seek(0)
+            return True, saved, mem_file
         else:
-            return False, "Failed to save measurements", None
-
+            # Save to disk (normal behavior)
+            wb = openpyxl.load_workbook(EXCEL)
+            auto_adjust_columns(wb)
+            wb.save(EXCEL)
+            return True, saved, None
+    elif alt:
+        return False, f"Excel locked — saved clone to: {alt}", None
+    else:
+        return False, "Failed to save measurements", None
 
     
 def get_available_holes_for_part(part):

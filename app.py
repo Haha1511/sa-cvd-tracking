@@ -422,14 +422,24 @@ with tabs[0]:
                 if "analysis_cache" in st.session_state:
                     st.session_state["analysis_cache"].pop((part,), None)
 
+                # ✅ Add download button if memory file exists
+                if mem_file:
+                    st.download_button(
+                        label="📥 Download Excel File",
+                        data=mem_file,
+                        file_name="SA_Machine_Data.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+
                 st.rerun()
             else:
                 st.error(f"❌ Failed to save measurements: {msg}")
 
-    # ---------------- SHOW SUCCESS MESSAGE AT BOTTOM ----------------
-    if "pending_success" in st.session_state:
-        st.success(st.session_state["pending_success"])
-        del st.session_state["pending_success"]
+        # ---------------- SHOW SUCCESS MESSAGE AT BOTTOM ----------------
+        if "pending_success" in st.session_state:
+            st.success(st.session_state["pending_success"])
+            del st.session_state["pending_success"]
+
 
 
 
