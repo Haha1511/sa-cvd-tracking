@@ -298,6 +298,7 @@ with tabs[0]:
         col_idx = 0
         for h in holes:
             with cols_in[col_idx]:
+
                 st.markdown('<div class="highlight-wrapper">', unsafe_allow_html=True)
                 st.markdown(f"**H{h}**")
 
@@ -308,6 +309,7 @@ with tabs[0]:
                     inputs.append({"Hole": str(h), "Feature": f, "Value": val})
 
                 st.markdown('</div>', unsafe_allow_html=True)
+
             col_idx = (col_idx + 1) % 3
 
         # ======================================================
@@ -375,7 +377,7 @@ with tabs[0]:
                 st.warning(f"Invalid number for H{it['Hole']} {it['Feature']}: '{raw}' — skipped")
 
         # Attach all pending photos to corresponding measurements
-        os.makedirs("data/uploaded_images", exist_ok=True)
+        os.makedirs("data/uploaded_images", exist_ok=True)  # Streamlit Cloud writable folder
         for p in st.session_state.pending_photos_list:
             hole = p["hole"]
             feature = p["feature"]
@@ -392,8 +394,8 @@ with tabs[0]:
                 if m["Hole"] == hole and m["Feature"].lower() == feature.lower():
                     m["ImagePath"] = img_path
 
-        st.session_state.pending_photos_list = []
-        st.session_state.photo_counter = 0
+        st.session_state.pending_photos_list = []  # clear after attaching
+        st.session_state.photo_counter = 0  # reset counter
 
         if not piece_id:
             st.error("Piece ID / Serial Number is required.")
@@ -402,9 +404,9 @@ with tabs[0]:
         else:
             # ✅ Use memory-saving version for Streamlit Cloud
             ok, msg, mem_file = add_measurement_rows(
-                part, machine, chamber, piece_id, part_flow, notes,
+                part, machine, chamber, piece_id, part_flow, notes, 
                 measurements, measured_date=measured_date, batch_number=batch_number,
-                return_bytesio=True
+                return_bytesio=True  # <-- key change for cloud
             )
 
             if ok:
@@ -417,17 +419,19 @@ with tabs[0]:
                 st.session_state.form_key = f"form_add_{st.session_state.form_counter}"
                 st.session_state.form_counter += 1
 
+                # Only store success message here
                 st.session_state["pending_success"] = f"✅ Saved to memory. ({msg}) — {now}"
 
                 if "analysis_cache" in st.session_state:
                     st.session_state["analysis_cache"].pop((part,), None)
 
-                # ✅ Add download button for Streamlit Cloud
+                # -------------------- ADD DOWNLOAD BUTTON --------------------
                 if mem_file:
+                    mem_file.seek(0)  # Reset pointer
                     st.download_button(
                         label="📥 Download Excel",
                         data=mem_file,
-                        file_name=f"{piece_id}_SA_Measurements.xlsx",
+                        file_name=f"SA_Machine_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
 
