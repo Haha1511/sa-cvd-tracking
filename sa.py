@@ -9,13 +9,16 @@ from openpyxl.styles import PatternFill, Border, Side
 from openpyxl.drawing.image import Image as XLImage
 
 # ---------- CONFIG ----------
-EXCEL = "test6.xlsx"        # <-- final workbook name
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+IMAGE_DIR = os.path.join(BASE_DIR, "images")  # folder to store all reference images
+
+EXCEL = os.path.join(BASE_DIR, "test6.xlsx")        # <-- final workbook name
 SHEET_MB = "Mixing Block Data"
 SHEET_GW = "Gas-Water Block Data"
 SHEET_SPECS = "Specs"
 SHEET_GW_REF = "GW Reference Photo"
 SHEET_MI_REF = "MI Reference Photo"
-GW_IMAGE = "TestGWB.png"    # <-- reference image filename
+GW_IMAGE = os.path.join(IMAGE_DIR, "TestGWB.png")    # <-- reference image filename
 
 PART_SHORT = {"mi": "Mixing Block", "gw": "Gas/Water Block"}
 MACHINE_MAP = {"1": "SA001", "2": "SA002", "3": "SA003"}
@@ -244,41 +247,36 @@ def add_reference_image():
     ws_gw = wb[gw_sheet_name] if gw_sheet_name in wb.sheetnames else wb.create_sheet(gw_sheet_name)
     ws_gw.sheet_view.showGridLines = False
 
-    gw_imgs = ["TestGWB.png", "TestGWBtri.png"]
+    gw_imgs = [os.path.join(IMAGE_DIR, "TestGWB.png"), os.path.join(IMAGE_DIR, "TestGWBtri.png")]
     row_start = 1
     for img_path in gw_imgs:
         if os.path.exists(img_path):
             img = XLImage(img_path)
             ws_gw.add_image(img, f"A{row_start}")
-            # auto-fit row height (approx scaling for Excel)
             ws_gw.row_dimensions[row_start].height = img.height * 0.75
-            # next image row: use current row + image row span
-            row_start += max(int(img.height / 15), 1)  # minimal gap
+            row_start += max(int(img.height / 15), 1)
 
     # --- MI Reference ---
     mi_sheet_name = "MI Reference Photo"
     ws_mi = wb[mi_sheet_name] if mi_sheet_name in wb.sheetnames else wb.create_sheet(mi_sheet_name)
     ws_mi.sheet_view.showGridLines = False
 
-    mi_images = ["MBtop.png", "MBbot.png", "MBtri.png"]
+    mi_images = [os.path.join(IMAGE_DIR, "MBtop.png"), os.path.join(IMAGE_DIR, "MBbot.png"), os.path.join(IMAGE_DIR, "MBtri.png")]
     col_start = 1
     for img_file in mi_images:
         if os.path.exists(img_file):
             img = XLImage(img_file)
             col_letter = get_column_letter(col_start)
             ws_mi.add_image(img, f"{col_letter}1")
-            # auto-fit column width
-            ws_mi.column_dimensions[col_letter].width = img.width / 7  # Excel column width scale
-            # auto-fit row height (first row)
+            ws_mi.column_dimensions[col_letter].width = img.width / 7
             ws_mi.row_dimensions[1].height = max(ws_mi.row_dimensions[1].height or 15, img.height * 0.75)
-            col_start += max(int(img.width / 60), 3)  # horizontal gap
+            col_start += max(int(img.width / 60), 3)
 
     try:
         wb.save(EXCEL)
     except:
         pass
     wb.close()
-
 
 # ---------- Core API for Streamlit ----------
 def _status_from_value(part, hole, feat, val):
@@ -548,33 +546,38 @@ def delete_rows_by_indexes(part, indexes_str):
 
 
 def open_excel_file():
+    import streamlit as st
+
     if not os.path.exists(EXCEL):
+        st.warning("Workbook not created yet.")
         return False, "Workbook not created yet"
-    try:
-        os.startfile(os.path.abspath(EXCEL))
-        return True, "Opened with default app"
-    except Exception:
-        try:
-            webbrowser.open(os.path.abspath(EXCEL))
-            return True, "Opened via webbrowser"
-        except Exception as e:
-            return False, f"Cannot open: {e}"
+
+    with open(EXCEL, "rb") as f:
+        excel_bytes = f.read()
+
+    st.download_button(
+        label="📂 Download / Open Excel File",
+        data=excel_bytes,
+        file_name=os.path.basename(EXCEL),
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    return True, "Download ready"
+
 
 def get_reference_image_path():
     if os.path.exists(GW_IMAGE):
         return os.path.abspath(GW_IMAGE)
     return None
-
 def show_reference_photos():
-    """
-    Streamlit viewer for Mixing Block and Gas/Water Block reference photos.
-    Includes options to view all images, open externally, and download.
-    """
     import streamlit as st
-    import os, base64, webbrowser
+    import os, base64
     from PIL import Image
 
     st.subheader("📸 Reference Photos Viewer")
+
+    # --- Use correct IMAGE_DIR from main code ---
+    IMAGE_DIR = os.path.join(BASE_DIR, "images")
+    PLACEHOLDER = os.path.join(IMAGE_DIR, "placeholder.png")
 
     # --- Step 1: Choose Part Type ---
     part_type = st.radio(
@@ -586,16 +589,16 @@ def show_reference_photos():
     # --- Step 2: Define valid image mappings ---
     image_map = {
         "Mixing Block": {
-            "Top View": "MBtop.png",
-            "Bottom View": "MBbot.png",
-            "Trimetric View": "MBtri.png",
+            "Top View": os.path.join(IMAGE_DIR, "MBtop.png"),
+            "Bottom View": os.path.join(IMAGE_DIR, "MBbot.png"),
+            "Trimetric View": os.path.join(IMAGE_DIR, "MBtri.png"),
         },
         "Gas/Water Block": {
-            "Front View": "TestGWB.png",
-            "Trimetric View": "TestGWBtri.png",
+            "Front View": os.path.join(IMAGE_DIR, "TestGWB.png"),
+            "Trimetric View": os.path.join(IMAGE_DIR, "TestGWBtri.png"),
         },
     }
-
+    
     # --- Step 3: Define view options ---
     view_options = list(image_map[part_type].keys()) + ["All Views (Side by Side)"]
     selected_view = st.selectbox("Select View:", view_options)
@@ -603,34 +606,52 @@ def show_reference_photos():
     st.markdown("<hr>", unsafe_allow_html=True)
 
     # --- Step 4: Display Logic ---
+    def load_image_or_placeholder(path, placeholder=PLACEHOLDER):
+        if os.path.exists(path):
+            return Image.open(path)
+        elif os.path.exists(placeholder):
+            return Image.open(placeholder)
+        else:
+            return None  # no image available at all
+
     if selected_view == "All Views (Side by Side)":
         st.markdown(f"<h4 style='text-align:center;'>{part_type} — All Views</h4>", unsafe_allow_html=True)
         views = list(image_map[part_type].keys())
         num_cols = min(3, len(views))
         cols = st.columns(num_cols, gap="medium")
 
+        # Determine resize sizes
+        img_sizes = {}
+        if part_type == "Mixing Block":
+            max_width = 350
+            for view in views:
+                img = load_image_or_placeholder(image_map[part_type][view])
+                if img:
+                    ratio = max_width / img.width
+                    img_sizes[view] = (max_width, int(img.height * ratio))
+        else:
+            target_height = 500
+            for view in views:
+                img = load_image_or_placeholder(image_map[part_type][view])
+                if img:
+                    ratio = target_height / img.height
+                    img_sizes[view] = (int(img.width * ratio), target_height)
+
+        # Display images
         for i, view in enumerate(views):
             img_path = image_map[part_type][view]
-            if os.path.exists(img_path):
-                img = Image.open(img_path)
-
-                # 🔹 Resize only Mixing Block images
-                if part_type == "Mixing Block":
-                    max_width = 350
-                    ratio = max_width / img.width
-                    new_height = int(img.height * ratio)
-                    img = img.resize((max_width, new_height))
-
-                img_bytes = open(img_path, "rb").read()
+            img = load_image_or_placeholder(img_path)
+            if img:
+                w, h = img_sizes.get(view, (300, 300))
+                img = img.resize((w, h))
+                img_bytes = open(img_path, "rb").read() if os.path.exists(img_path) else open(PLACEHOLDER, "rb").read()
                 img_base64 = base64.b64encode(img_bytes).decode()
-
-                # 🔹 Center display for all
                 cols[i % num_cols].markdown(
                     f"""
                     <div style="text-align:center;">
                         <img src="data:image/png;base64,{img_base64}" 
                              alt="{view}" 
-                             style="width:{img.width}px; height:auto; border-radius:10px; 
+                             style="width:{w}px; height:{h}px; border-radius:10px; 
                              box-shadow:0px 4px 10px rgba(0,0,0,0.3);" />
                         <p style="font-style:italic; color:gray;">{view}</p>
                     </div>
@@ -639,51 +660,62 @@ def show_reference_photos():
                 )
 
     else:
-        # --- Single Image View ---
-        img_file = image_map[part_type][selected_view]
-        if os.path.exists(img_file):
-            img = Image.open(img_file)
-
+        # Single Image View
+        img_path = image_map[part_type][selected_view]
+        img = load_image_or_placeholder(img_path)
+        if img:
             if part_type == "Mixing Block":
-                # 🔹 Resize & center only Mixing Block
                 max_width = 600
                 ratio = max_width / img.width
                 new_height = int(img.height * ratio)
-                img = img.resize((max_width, new_height))
-                img_bytes = open(img_file, "rb").read()
-                img_base64 = base64.b64encode(img_bytes).decode()
-
-                st.markdown(
-                    f"""
-                    <div style="text-align:center;">
-                        <img src="data:image/png;base64,{img_base64}" 
-                             style="width:{max_width}px; height:auto; border-radius:10px; 
-                             box-shadow:0px 4px 10px rgba(0,0,0,0.3);" />
-                        <p style="font-style:italic; color:gray;">{part_type} — {selected_view}</p>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
             else:
-                # Gas/Water Block — show full image (no resize)
-                st.image(img, caption=f"{part_type} — {selected_view}")
+                new_height = 500
+                ratio = new_height / img.height
+                max_width = int(img.width * ratio)
+            img = img.resize((max_width, new_height))
+            img_bytes = open(img_path, "rb").read() if os.path.exists(img_path) else open(PLACEHOLDER, "rb").read()
+            img_base64 = base64.b64encode(img_bytes).decode()
+            st.markdown(
+                f"""
+                <div style="text-align:center;">
+                    <img src="data:image/png;base64,{img_base64}" 
+                         style="width:{max_width}px; height:{new_height}px; border-radius:10px; 
+                         box-shadow:0px 4px 10px rgba(0,0,0,0.3);" />
+                    <p style="font-style:italic; color:gray;">{part_type} — {selected_view}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
         else:
-            st.info(f"⚠️ {selected_view} not available for {part_type}")
+            st.info(f"No image available for {selected_view}.")
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
-    # --- Step 5: Open Externally Section ---
-    st.markdown("### 🔍 Open Externally")
+    # --- Step 5: Open Externally Section (fixed for Streamlit) ---
+    st.markdown("### 🔍 Open / Download Image Externally")
     open_view = st.selectbox("Select View to Open:", list(image_map[part_type].keys()), key=f"open_{part_type}")
-    if st.button("Open Selected Image", key=f"open_btn_{part_type}"):
-        img_path = image_map[part_type][open_view]
-        if os.path.exists(img_path):
-            try:
-                os.startfile(img_path)
-            except Exception:
-                webbrowser.open(img_path)
-        else:
-            st.warning(f"⚠️ {open_view} image not found.")
+    img_path = image_map[part_type][open_view]
+
+    if os.path.exists(img_path):
+        with open(img_path, "rb") as f:
+            st.download_button(
+                label=f"Open / Download {open_view}",
+                data=f,
+                file_name=os.path.basename(img_path),
+                mime="image/png",
+                key=f"dl_open_{part_type}"
+            )
+    elif os.path.exists(PLACEHOLDER):
+        with open(PLACEHOLDER, "rb") as f:
+            st.download_button(
+                label=f"Open / Download {open_view} (placeholder)",
+                data=f,
+                file_name=os.path.basename(PLACEHOLDER),
+                mime="image/png",
+                key=f"dl_open_placeholder_{part_type}"
+            )
+    else:
+        st.warning(f"⚠️ {open_view} image not found.")
 
     # --- Step 6: Download Section ---
     st.markdown("### ⬇️ Download Image")
@@ -698,8 +730,18 @@ def show_reference_photos():
                 mime="image/png",
                 key=f"dl_btn_{part_type}"
             )
+    elif os.path.exists(PLACEHOLDER):
+        with open(PLACEHOLDER, "rb") as f:
+            st.download_button(
+                label=f"Download {dl_view} (placeholder)",
+                data=f,
+                file_name=os.path.basename(PLACEHOLDER),
+                mime="image/png",
+                key=f"dl_btn_placeholder_{part_type}"
+            )
     else:
         st.warning(f"⚠️ {dl_view} image not available for download.")
+
 
 def draw_trend_with_spec(df, spec_min, spec_max, title="Trend Chart"):
     import matplotlib.pyplot as plt
@@ -750,3 +792,16 @@ def draw_trend_with_spec(df, spec_min, spec_max, title="Trend Chart"):
     else:
         st.success("✅ All points are within the specification.")
 
+# ---------- Cross-platform open helper ----------
+import platform, subprocess
+
+def open_file_crossplatform(path):
+    if not os.path.exists(path): return False
+    system = platform.system()
+    try:
+        if system == "Windows": os.startfile(path)
+        elif system == "Darwin": subprocess.run(["open", path])
+        else: subprocess.run(["xdg-open", path])
+        return True
+    except:
+        return False

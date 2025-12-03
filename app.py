@@ -18,6 +18,7 @@ st.set_page_config(page_title="SA Machine Data - Test6", layout="wide")
 import sa, importlib
 importlib.reload(sa)  # force reload every run so updated code is used
 
+
 # ✅ Import required functions and constants
 from sa import (
     ensure_workbook,
@@ -34,8 +35,29 @@ from sa import (
     DATA_COLS,
     get_specs_df,
     export_specs_for_vendor,
+    open_file_crossplatform
 )
 
+
+
+# Load Excel only once
+if "df_plot_date" not in st.session_state:
+    try:
+        df = pd.read_excel("test6.xlsx")
+        # Ensure necessary columns exist
+        for col in ["Hole", "Value", "Timestamp", "Nominal", "LSL", "USL"]:
+            if col not in df.columns:
+                df[col] = pd.NA
+        # Convert Timestamp to datetime
+        df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
+        st.session_state.df_plot_date = df
+    except Exception as e:
+        st.error(f"Failed to load Excel: {e}")
+        st.session_state.df_plot_date = pd.DataFrame(
+            columns=["Hole","Value","Timestamp","Nominal","LSL","USL"]
+        )
+
+df_plot_date = st.session_state.df_plot_date
 
 # Ensure workbook exists (backend will create if missing)
 ensure_workbook()
@@ -45,7 +67,7 @@ ensure_workbook()
 col_logo1, col_title, col_logo2 = st.columns([1, 6, 1])
 
 with col_logo1:
-    logo_path = "fuji.png.png"  # Your local logo
+    logo_path = "fuji.png.png"  
     if os.path.exists(logo_path):
         try:
             # Add margin-top to push the logo down
@@ -213,7 +235,7 @@ if "analysis_cache" not in st.session_state:
 
 # Tabs (added new Specs tab)
 tabs = st.tabs(
-    ["📥 Add Measurement", "📈 Trend Chart", "📊 View & Manage Data", "📘 View Spec", "🖼️ Reference Hole Photo", "📁 Excel File"]
+    ["📥 Add Measurement", "📈 Trend Chart", "📊 View & Manage Data", "📘 View Spec", "🖼️ Reference Hole Photo", "📁 Excel File","📝Overall Summary"]
 )
 
 # ---------------- AUTO CLEAR + BUTTON HIGHLIGHT FLAGS ----------------
@@ -464,6 +486,12 @@ with tabs[1]:
         if ch != "All":
             df_trend = df_trend[df_trend["Chamber"] == ch]
 
+        # ---- PIECE ID FILTER ADDITION ----
+        piece_ids = ["All"] + sorted(df_trend["Piece ID"].dropna().unique().tolist())
+        pid = st.selectbox("Piece ID", piece_ids)
+        if pid != "All":
+            df_trend = df_trend[df_trend["Piece ID"] == pid]
+
         # Hole selection (multi-select)
         raw_holes = df_trend["Hole"].dropna().unique().tolist()
         valid_holes = [h for h in raw_holes if str(h).strip().upper().startswith("H") and str(h).strip()[1:].isdigit()]
@@ -512,7 +540,7 @@ with tabs[1]:
                     return colors
 
                 st.dataframe(
-                    df_single[["Measured Date", "Machine", "Chamber", "Hole", "Feature", "Value", "LSL", "USL"]].style.apply(highlight_value_only, axis=1),
+                    df_single[["Timestamp", "Measured Date", "Machine", "Chamber", "Piece ID", "Hole", "Feature", "Value", "LSL", "USL"]].style.apply(highlight_value_only, axis=1),
                     use_container_width=True
                 )
 
@@ -530,12 +558,12 @@ with tabs[1]:
                 else:
                     col_d1, col_d2 = st.columns(2)
                     with col_d1:
-                        start_date = st.date_input("Start Date", value=min_dt, min_value=min_dt, max_value=max_dt)
+                        start_date = st.date_input("Start Measured Date", value=min_dt, min_value=min_dt, max_value=max_dt)
                     with col_d2:
-                        end_date = st.date_input("End Date", value=max_dt, min_value=min_dt, max_value=max_dt)
+                        end_date = st.date_input("End Measured Date", value=max_dt, min_value=min_dt, max_value=max_dt)
 
                     if start_date > end_date:
-                        st.error("❌ Start date cannot be after end date.")
+                        st.error("❌ Start measured date cannot be after end measured date.")
                         df_plot_date = df_plot_filtered
                     else:
                         df_plot_date = df_plot_filtered[(df_plot_filtered["Measured Date"] >= start_date) &
@@ -543,7 +571,7 @@ with tabs[1]:
 
                 if df_plot_date.empty:
                     st.warning("⚠ No data in the selected date range.")
-
+                    
                 # ------------------ Professional Plotting ------------------
                 fig, ax = plt.subplots(figsize=(10, 4.5))
                 ax.set_facecolor("#f5f5f5")
@@ -555,6 +583,13 @@ with tabs[1]:
                 for i, hole in enumerate(selected_holes):
                     hole_colors_dict[hole] = default_colors[i % len(default_colors)]
 
+                # REMOVE spec_shaded — draw spec zone for each hole individually
+
+                # Keep nominal/LSL/USL flags for drawing only once per chart
+                nominal_drawn = False
+                lsl_drawn = False
+                usl_drawn = False
+
                 for i, hole in enumerate(selected_holes):
                     df_h = df_plot_date[df_plot_date["Hole"] == hole]
                     if df_h.empty:
@@ -563,34 +598,68 @@ with tabs[1]:
                     x_values = range(1, len(df_h)+1)
                     y_values = df_h["Value"].astype(float)
 
-                    # Spec zone shading
+                    # ✅ Draw spec zone for this hole
                     lsl_val = df_h["LSL"].dropna().iloc[0] if "LSL" in df_h.columns and not df_h["LSL"].dropna().empty else None
                     usl_val = df_h["USL"].dropna().iloc[0] if "USL" in df_h.columns and not df_h["USL"].dropna().empty else None
                     if lsl_val is not None and usl_val is not None:
-                        ax.fill_between(x_values, lsl_val, usl_val, color="#d4f4dd", alpha=0.3, label="Spec zone")
+                        ax.fill_between(x_values, lsl_val, usl_val, color="#d4f4dd", alpha=0.3, label=f"{hole} Spec zone")
 
                     # Plot values & markers
                     ax.plot(x_values, y_values, color=hole_colors_dict[hole], linewidth=2.2, label=f"{hole} Value")
-                    ax.scatter(x_values, y_values, color=hole_colors_dict[hole], s=65, edgecolors="white", linewidth=0.7, zorder=3)
+                    ax.scatter(x_values, y_values, color=hole_colors_dict[hole], s=65,
+                               edgecolors="white", linewidth=0.7, zorder=4)
 
                     # Trend line
                     if len(x_values) >= 2:
-                        z = np.polyfit(list(x_values), y_values, 1)
-                        p = np.poly1d(z)
-                        ax.plot(x_values, p(x_values), linestyle="--", color=hole_colors_dict[hole], alpha=0.7, label=f"{hole} Trend")
+                        if len(set(y_values)) == 1:
+                            ax.plot(
+                                x_values,
+                                [y_values.iloc[0]] * len(x_values),
+                                linestyle="--",
+                                color=hole_colors_dict[hole],
+                                linewidth=2,
+                                alpha=0.7,
+                                label=f"{hole} Trend"
+                            )
+                        else:
+                            z = np.polyfit(list(x_values), y_values, 1)
+                            p = np.poly1d(z)
+                            ax.plot(
+                                x_values,
+                                p(x_values),
+                                linestyle="--",
+                                color=hole_colors_dict[hole],
+                                linewidth=2,
+                                alpha=0.8,
+                                zorder=3,
+                                label=f"{hole} Trend"
+                            )
 
                     # Annotate last value
-                    ax.text(x_values[-1]+0.1, y_values.iloc[-1], f"{y_values.iloc[-1]:.2f}", 
-                            fontsize=9, fontweight="bold", color=hole_colors_dict[hole], va="bottom", ha="left")
+                    ax.text(
+                        x_values[-1] + 0.1,
+                        y_values.iloc[-1],
+                        f"{y_values.iloc[-1]:.2f}",
+                        fontsize=9,
+                        fontweight="bold",
+                        color=hole_colors_dict[hole],
+                        va="bottom",
+                        ha="left"
+                    )
 
-                    # Nominal/LSL/USL lines
+                    # Nominal/LSL/USL lines — draw only once
                     nominal_val = df_h["Nominal"].dropna().iloc[0] if "Nominal" in df_h.columns and not df_h["Nominal"].dropna().empty else None
-                    if nominal_val is not None:
+                    if nominal_val is not None and not nominal_drawn:
                         ax.axhline(nominal_val, linestyle="--", color="yellow", linewidth=1.5, alpha=0.7, label="Nominal")
-                    if lsl_val is not None:
+                        nominal_drawn = True
+
+                    if lsl_val is not None and not lsl_drawn:
                         ax.axhline(lsl_val, linestyle="--", color="red", linewidth=1.5, alpha=0.7, label="LSL")
-                    if usl_val is not None:
+                        lsl_drawn = True
+
+                    if usl_val is not None and not usl_drawn:
                         ax.axhline(usl_val, linestyle="--", color="green", linewidth=1.5, alpha=0.7, label="USL")
+                        usl_drawn = True
 
                 ax.set_xlabel("Measurement Count", fontsize=10, color="#333333")
                 ax.set_ylabel("Measurement (mm)", fontsize=10, color="#333333")
@@ -598,13 +667,17 @@ with tabs[1]:
                 ax.tick_params(colors="#333333", labelsize=9)
                 mach_label = mch if mch != "All" else "All Machines"
                 ch_label = ch if ch != "All" else "All Chambers"
-                ax.set_title(f"Trend — {part_trend} ({feat})\n{mach_label}, {ch_label}", fontsize=13, color="#222222", fontweight="bold")
+                ax.set_title(
+                    f"Trend — {part_trend} ({feat})\n{mach_label}, {ch_label}",
+                    fontsize=13,
+                    color="#222222",
+                    fontweight="bold"
+                )
+
                 ax.legend(fontsize=9, loc="upper left", framealpha=0.9)
 
                 plt.tight_layout()
                 st.pyplot(fig)
-
-
 
                 # --- Download ---
                 buf = BytesIO()
@@ -616,7 +689,6 @@ with tabs[1]:
                     file_name=f"Trend_{feat}.png",
                     mime="image/png",
                 )
-
 
                 # ------------------ Trend Analysis UI (Multi-hole with specs) ------------------
                 st.markdown(
@@ -673,10 +745,17 @@ with tabs[1]:
                         slope = 0.0; intercept = float(y[0]); r2 = 0.0
 
                     delta = float(y[-1] - y[0])
-                    abs_slope = abs(slope)
-                    if abs_slope < 0.01: trend_status = ("Stable", "status-green")
-                    elif abs_slope < 0.1: trend_status = ("Drifting", "status-yellow")
-                    else: trend_status = ("Rapid change", "status-red")
+                    # --- FIXED TREND LOGIC (no abs(), directional and correct) ---
+                    if slope > 0.1:
+                        trend_status = ("Rapid upward change", "status-red")
+                    elif slope < -0.1:
+                        trend_status = ("Rapid downward change", "status-red")
+                    elif slope > 0.01:
+                        trend_status = ("Drifting upward", "status-yellow")
+                    elif slope < -0.01:
+                        trend_status = ("Drifting downward", "status-yellow")
+                    else:
+                        trend_status = ("Stable", "status-green")
 
                     # Nominal/LSL/USL
                     nominal = df["Nominal"].dropna().iloc[0] if "Nominal" in df.columns and not df["Nominal"].dropna().empty else None
@@ -846,11 +925,29 @@ with tabs[1]:
             st.warning("No measurement data available to generate trend charts.")
         else:
             try:
+                # Initialize progress bar and status text
+                progress = st.progress(0)
+                status_text = st.empty()
+
                 # Create new workbook
                 wb = Workbook()
                 wb.remove(wb.active)
 
                 parts = ["Mixing Block", "Gas/Water Block"]
+
+                # Calculate total steps for progress
+                total_steps = 0
+                for part in parts:
+                    df_part_tmp = show_trend_df(part)
+                    if df_part_tmp.empty:
+                        continue
+                    machines_tmp = sorted(df_part_tmp["Machine"].dropna().unique().tolist())
+                    chambers_tmp = sorted(df_part_tmp["Chamber"].dropna().unique().tolist())
+                    piece_ids_tmp = sorted(df_part_tmp["Piece ID"].dropna().unique().tolist())
+                    total_steps += len(machines_tmp) * len(chambers_tmp) * len(piece_ids_tmp)
+                if total_steps == 0:
+                    total_steps = 1  # avoid division by zero
+                current_step = 0
 
                 for part in parts:
                     df_part = show_trend_df(part)
@@ -859,19 +956,30 @@ with tabs[1]:
 
                     machines = sorted(df_part["Machine"].dropna().unique().tolist())
                     chambers = sorted(df_part["Chamber"].dropna().unique().tolist())
-                    combos = [("All", "All")] + [(m, "All") for m in machines] + [(m, ch) for m in machines for ch in chambers]
+                    piece_ids_list = sorted(df_part["Piece ID"].dropna().unique().tolist())
+                    combos = [("All", "All", "All")] + [(m, "All", "All") for m in machines] + [(m, ch, "All") for m in machines for ch in chambers] + [(m, ch, pid) for m in machines for ch in chambers for pid in piece_ids_list]
 
-                    for mach, ch in combos:
+                    for mach, ch, pid in combos:
                         df_filtered = df_part.copy()
                         if mach != "All":
                             df_filtered = df_filtered[df_filtered["Machine"] == mach]
                         if ch != "All":
                             df_filtered = df_filtered[df_filtered["Chamber"] == ch]
+                        if pid != "All":
+                            df_filtered = df_filtered[df_filtered["Piece ID"] == pid]
 
                         if df_filtered.empty:
+                            current_step += 1
+                            progress.progress(min(current_step / total_steps, 1.0))
                             continue
 
-                        sheet_name = f"{part}_{mach}_{ch}".replace(" ", "_").replace("/", "_")[:31]
+                        # Update status
+                        status_text.text(f"Processing {part} | Machine: {mach} | Chamber: {ch} | Piece ID: {pid}...")
+                        current_step += 1
+                        progress.progress(min(current_step / total_steps, 1.0))
+
+                        # Sheet name: include Part, Machine, Chamber, PieceID
+                        sheet_name = f"{part}_{mach}_{ch}_{pid}".replace(" ", "_").replace("/", "_")[:31]
                         sheet = wb.create_sheet(title=sheet_name)
                         current_row = 1
 
@@ -952,7 +1060,8 @@ with tabs[1]:
                                 ax.set_xlabel("Measurement Count", fontsize=10, color="#333333")
                                 ax.set_ylabel("Measurement (mm)", fontsize=10, color="#333333")
                                 ax.tick_params(colors="#333333", labelsize=9)
-                                ax.set_title(f"{part} | {hole} | {feat}", fontsize=12, color="#222222")
+                                # Include Piece ID in chart title
+                                ax.set_title(f"{part} | {hole} | {feat} | Piece ID: {pid}", fontsize=12, color="#222222")
                                 ax.legend(fontsize=8, loc="upper left")
                                 plt.tight_layout()
 
@@ -967,7 +1076,6 @@ with tabs[1]:
                                 img.anchor = f"A{current_row}"
                                 sheet.add_image(img)
                                 current_row += 5 + int(fig_height*4)
-
 
                 # ------------------ AUTO ADJUST ALL COLUMNS ------------------
                 try:
@@ -991,11 +1099,12 @@ with tabs[1]:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
+                progress.progress(1.0)
+                status_text.text("✅ Completed")
                 st.success("✅ Trend charts updated successfully!")
 
             except Exception as e:
                 st.error(f"Failed to update trend charts: {e}")
-
 
     # ---------------- Open Trend Charts Button ----------------
     if st.button("Open Trend Charts"):
@@ -1018,8 +1127,18 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("View & Manage Data")
     st.info("💡 Please make sure to close the Excel file before performing any actions.")
-    
-    # ✅ Toast message handler (must be placed near top, after st.tabs)
+
+    # ------------------ CONFIG PATHS ------------------
+    import os
+    import pathlib
+
+    # Make EXCEL path flexible
+    EXCEL = st.session_state.get("EXCEL_PATH", "test6.xlsx")  # default Excel filename
+    # Ensure uploaded_images folder exists
+    IMG_DIR = pathlib.Path("uploaded_images")
+    IMG_DIR.mkdir(exist_ok=True)
+
+    # Toast handler
     if "toast_msg" in st.session_state:
         st.toast(st.session_state["toast_msg"], icon=st.session_state.get("toast_icon", "ℹ️"))
         del st.session_state["toast_msg"]
@@ -1029,45 +1148,146 @@ with tabs[2]:
     part_view = st.selectbox("Which part to view", ["Mixing Block", "Gas/Water Block"], key="view_part")
     sheet_name = "Mixing Block Data" if part_view == "Mixing Block" else "Gas-Water Block Data"
 
-    # --- Try to read Excel safely ---
+    # --- Read Excel ---
     try:
-        df_view = pd.read_excel(EXCEL, sheet_name=sheet_name)
-        # 🔹 Remove any unnamed columns automatically
-        df_view = df_view.loc[:, ~df_view.columns.str.contains("^Unnamed", case=False)]
+        df_view_orig = pd.read_excel(EXCEL, sheet_name=sheet_name)
+        df_view_orig = df_view_orig.loc[:, ~df_view_orig.columns.str.contains("^Unnamed", case=False)]
 
-        # Reorder columns: Piece ID -> Part In/Out -> Batch Cleaning -> rest
-        if "Piece ID" in df_view.columns and "Part In/Out" in df_view.columns:
-            cols = list(df_view.columns)
+        if "Piece ID" in df_view_orig.columns and "Part In/Out" in df_view_orig.columns:
+            cols = list(df_view_orig.columns)
             if "Batch Cleaning" in cols:
                 cols.remove("Batch Cleaning")
             cols.remove("Part In/Out")
             idx = cols.index("Piece ID")
             cols.insert(idx + 1, "Part In/Out")
-            cols.insert(idx + 2, "Batch Cleaning")  # now Batch Cleaning is after Part In/Out
-            df_view = df_view[cols]
+            cols.insert(idx + 2, "Batch Cleaning")
+            df_view_orig = df_view_orig[cols]
 
-
-        # 🔹 Add Measured Date after Timestamp if exists
-        if "Timestamp" in df_view.columns and "Measured Date" in df_view.columns:
-            cols = list(df_view.columns)
+        if "Timestamp" in df_view_orig.columns and "Measured Date" in df_view_orig.columns:
+            cols = list(df_view_orig.columns)
             cols.remove("Measured Date")
             idx = cols.index("Timestamp")
             cols.insert(idx + 1, "Measured Date")
-            df_view = df_view[cols]
+            df_view_orig = df_view_orig[cols]
 
     except PermissionError:
-        st.error("❌ Excel file is currently open. Please **close the Excel file first** and refresh the page.")
+        st.error("❌ Excel file is open. Please close it first.")
         st.stop()
     except Exception as e:
         st.error(f"⚠️ Failed to load data: {e}")
-        df_view = pd.DataFrame(columns=DATA_COLS + ["Measured Date", "Batch Cleaning #"])
+        df_view_orig = pd.DataFrame()
 
+    # ------------------ ENSURE df_view IS ALWAYS DEFINED ------------------
+    if df_view_orig.empty:
+        df_view = pd.DataFrame()  # empty DataFrame if Excel is empty or missing
+    else:
+        df_view = df_view_orig.copy()
+        df_view["_orig_index"] = df_view.index  # Track original Excel row
+
+        # Safe conversion for Measured Date
+        if "Measured Date" in df_view.columns:
+            df_view["Measured Date"] = pd.to_datetime(df_view["Measured Date"], errors="coerce")
+
+        # Reset Filters button
+        if st.button("🔄 Reset Filters"):
+            for key in ["Machine", "Chamber", "Hole", "Feature", "Status", "Piece_ID_filter"]:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
+
+        # Collapsible filter panel
+        with st.expander("Show / Hide Filters"):
+            col1, col2, col3 = st.columns(3)
+            col4, col5, col6 = st.columns(3)
+
+            # ---------------- MACHINE FILTER ----------------
+            machine_options = sorted(df_view_orig["Machine"].dropna().unique())
+            machine_default = st.session_state.get("Machine", machine_options)
+            machine_filter = col1.multiselect(
+                "Machine",
+                options=machine_options,
+                default=[m for m in machine_default if m in machine_options],
+                key="Machine"
+            )
+            df_view = df_view[df_view["Machine"].isin(machine_filter)]
+
+            # ---------------- CHAMBER FILTER ----------------
+            chamber_options = sorted(df_view_orig["Chamber"].dropna().unique())
+            chamber_default = st.session_state.get("Chamber", chamber_options)
+            chamber_filter = col2.multiselect(
+                "Chamber",
+                options=chamber_options,
+                default=[c for c in chamber_default if c in chamber_options],
+                key="Chamber"
+            )
+            df_view = df_view[df_view["Chamber"].isin(chamber_filter)]
+
+            # ---------------- HOLE FILTER ----------------
+            hole_options = sorted(df_view_orig["Hole"].dropna().unique())
+            hole_default = st.session_state.get("Hole", hole_options)
+            hole_filter = col3.multiselect(
+                "Hole",
+                options=hole_options,
+                default=[h for h in hole_default if h in hole_options],
+                key="Hole"
+            )
+            df_view = df_view[df_view["Hole"].isin(hole_filter)]
+
+            # ---------------- FEATURE FILTER ----------------
+            feature_options = sorted(df_view_orig["Feature"].dropna().unique())
+            feature_default = [f for f in st.session_state.get("Feature", feature_options) if f in feature_options]
+            feature_filter = col4.multiselect(
+                "Feature",
+                options=feature_options,
+                default=feature_default if feature_default else [],
+                key="Feature"
+            )
+            df_view = df_view[df_view["Feature"].isin(feature_filter)]
+
+            # ---------------- PIECE ID FILTER ----------------
+            piece_input = col5.text_input(
+                "Piece ID (contains)",
+                value=st.session_state.get("Piece_ID_filter", ""),
+                key="Piece_ID_filter"
+            )
+            if piece_input.strip():
+                df_view = df_view[df_view["Piece ID"].astype(str).str.contains(piece_input.strip(), case=False)]
+
+            # ---------------- STATUS FILTER ----------------
+            if "Status" in df_view.columns:
+                df_view["Status"] = df_view["Status"].astype(str).str.strip().str.upper()
+                status_options = ["PASS", "FAIL"]
+                status_filter = col6.selectbox(
+                    "Status",
+                    options=["All"] + status_options,
+                    index=0,
+                    key="Status"
+                )
+                if status_filter != "All":
+                    df_view = df_view[df_view["Status"] == status_filter.upper()]
+
+            # ---------------- DATE RANGE FILTER ----------------
+            if "Measured Date" in df_view.columns:
+                valid_dates = df_view["Measured Date"].dropna()
+                min_date = valid_dates.min().date() if not valid_dates.empty else datetime.now().date()
+                max_date = valid_dates.max().date() if not valid_dates.empty else datetime.now().date()
+                start_date, end_date = st.date_input(
+                    "Measured Date Range",
+                    value=(min_date, max_date)
+                )
+                df_view = df_view[
+                    (df_view["Measured Date"].dt.date >= start_date) &
+                    (df_view["Measured Date"].dt.date <= end_date)
+                ]
+
+        st.success(f"Filtered results: **{len(df_view)} rows**")
+
+    # ===================== DISPLAY TABLE =====================
     import urllib.parse
     import base64
-        
-    # ===================== DISPLAY TABLE =====================
+
     if df_view.empty:
-        st.info("No records found.")
+        st.info("No matching records found. Adjust filter or select another part.")
     else:
         df_display = df_view.copy()
         df_display.index = df_display.index + 1  # make 1-based like Excel
@@ -1091,19 +1311,9 @@ with tabs[2]:
                 color: white;
                 font-weight: bold;
             }
-            .pass {
-                background-color: #27ae60 !important;
-                color: white !important;
-                font-weight: bold;
-            }
-            .fail {
-                background-color: #e74c3c !important;
-                color: white !important;
-                font-weight: bold;
-            }
-            tr.separator td {
-                border-top: 4px solid black !important;
-            }
+            .pass { background-color: #27ae60 !important; color: white !important; font-weight: bold; }
+            .fail { background-color: #e74c3c !important; color: white !important; font-weight: bold; }
+            tr.separator td { border-top: 4px solid black !important; }
             .image-cell img {
                 max-width: 100px;
                 max-height: 100px;
@@ -1111,27 +1321,27 @@ with tabs[2]:
                 margin: auto;
                 cursor: pointer;
             }
+            .value-cell { background-color: #f9f9d9; }
+            .lsl-cell { background-color: #e8f4f8; }
+            .usl-cell { background-color: #e8f8e8; }
         </style>
         <table class="custom-table">
             <thead><tr>
         """
-        # Header
+
         html += "<th>Row</th>" + "".join(f"<th>{col}</th>" for col in df_display.columns) + "</tr></thead><tbody>"
 
-        # Rows with separator lines
         for i in range(len(df_display)):
             row = df_display.iloc[i]
             row_class = ""
 
-            # Add bold line between measurement groups (Piece ID change)
             if i > 0 and "Piece ID" in df_display.columns:
                 prev_id = df_display.iloc[i - 1]["Piece ID"]
                 curr_id = row["Piece ID"]
                 if str(curr_id).strip() != str(prev_id).strip():
                     row_class = "separator"
 
-            html += f"<tr class='{row_class}'>"
-            html += f"<td><b>{i+1}</b></td>"  # show index
+            html += f"<tr class='{row_class}'><td><b>{i+1}</b></td>"
 
             for col in df_display.columns:
                 val = row[col]
@@ -1139,24 +1349,21 @@ with tabs[2]:
                 cell_class = ""
 
                 if col.lower() == "status":
-                    if str(val).strip().lower() == "pass":
-                        cell_class = "pass"
-                    elif str(val).strip().lower() == "fail":
-                        cell_class = "fail"
+                    cell_class = "pass" if str(val).lower() == "pass" else "fail"
 
-                # Display image in the table only
+                if col == "Value": cell_class += " value-cell"
+                elif col == "LSL": cell_class += " lsl-cell"
+                elif col == "USL": cell_class += " usl-cell"
+
                 if col == "Image Path" and val != "":
                     img_path = val.strip()
                     if os.path.exists(img_path):
                         with open(img_path, "rb") as f:
                             data = f.read()
                             encoded = base64.b64encode(data).decode()
-                        img_html = f"<td class='{cell_class}'>"
-                        img_html += f"<img src='data:image/jpeg;base64,{encoded}' class='image-cell'/>"
-                        img_html += "</td>"
+                        html += f"<td class='{cell_class}'><img src='data:image/jpeg;base64,{encoded}' class='image-cell'/></td>"
                     else:
-                        img_html = f"<td class='{cell_class}'> </td>"
-                    html += img_html
+                        html += f"<td class='{cell_class}'></td>"
                 else:
                     html += f"<td class='{cell_class}'>{val}</td>"
 
@@ -1176,7 +1383,7 @@ with tabs[2]:
             st.warning("Enter rows or ranges to delete.")
         else:
             try:
-                # --- Parse user input for 1-based deletion ---
+                # Parse user input
                 rows_to_delete = []
                 parts = [r.strip() for r in raw.split(",") if r.strip()]
                 for p in parts:
@@ -1187,28 +1394,24 @@ with tabs[2]:
                         rows_to_delete.append(int(p))
 
                 rows_to_delete = sorted(set(rows_to_delete))
-                rows_to_delete_zero_based = [r - 1 for r in rows_to_delete if 1 <= r <= len(df_view)]
+                # Map filtered indices to original Excel indices
+                rows_to_delete_orig = df_view["_orig_index"].iloc[[r-1 for r in rows_to_delete if 1 <= r <= len(df_view)]].tolist()
 
-                if not rows_to_delete_zero_based:
+                if not rows_to_delete_orig:
                     st.warning("⚠️ No valid rows to delete.")
                 else:
-                    df_upd = df_view.drop(df_view.index[rows_to_delete_zero_based]).reset_index(drop=True)
+                    df_upd = df_view_orig.drop(index=rows_to_delete_orig).reset_index(drop=True)
 
-                    # Remove unnamed columns (Excel artifacts)
-                    df_upd = df_upd.loc[:, ~df_upd.columns.str.contains("^Unnamed", case=False)]
-
+                    # Save back to Excel
                     try:
                         with pd.ExcelWriter(EXCEL, mode="a", engine="openpyxl", if_sheet_exists="replace") as writer:
                             df_upd.to_excel(writer, sheet_name=sheet_name, index=False)
 
-                        # ✅ Show success before rerun
                         st.success(f"✅ Deleted rows: {rows_to_delete}")
                         st.toast(f"Rows {rows_to_delete} deleted successfully 🗑️", icon="🗑️")
-
                         import time
                         time.sleep(1.5)
                         st.rerun()
-
                     except PermissionError:
                         st.error("❌ Excel file is open. Please **close Excel first** and try again.")
                     except Exception as e:
@@ -1220,8 +1423,6 @@ with tabs[2]:
     # ===================== DELETE IMAGE FOR SPECIFIC ROW =====================
     st.markdown("### 🖼️ Delete Image for Selected Hole")
     st.info("Enter row numbers exactly as shown in the table (1-based). Example: `1,2` or `3-5,7`")
-
-    # Input for rows or ranges to delete images
     delete_image_input = st.text_input("Rows to delete image for the selected hole (e.g. 1,2 or 1-5,7)", key="delete_image_input_view")
 
     if st.button("Delete Image for Selected Holes"):
@@ -1230,7 +1431,6 @@ with tabs[2]:
             st.warning("Enter rows or ranges to delete the images.")
         else:
             try:
-                # --- Parse user input for 1-based image deletion ---
                 rows_to_delete_image = []
                 parts = [r.strip() for r in raw.split(",") if r.strip()]
                 for p in parts:
@@ -1241,129 +1441,92 @@ with tabs[2]:
                         rows_to_delete_image.append(int(p))
 
                 rows_to_delete_image = sorted(set(rows_to_delete_image))
-                rows_to_delete_image_zero_based = [r - 1 for r in rows_to_delete_image if 1 <= r <= len(df_view)]
+                rows_to_delete_image_orig = df_view["_orig_index"].iloc[[r-1 for r in rows_to_delete_image if 1 <= r <= len(df_view)]].tolist()
 
-                if not rows_to_delete_image_zero_based:
+                if not rows_to_delete_image_orig:
                     st.warning("⚠️ No valid rows to delete image for.")
                 else:
-                    for row_to_delete_image in rows_to_delete_image_zero_based:
-                        image_path = df_view.loc[row_to_delete_image, 'Image Path']  # Get the image path of the selected row
+                    df_upd = df_view_orig.copy()
+                    for idx_orig in rows_to_delete_image_orig:
+                        image_path = df_upd.at[idx_orig, 'Image Path']
                         if image_path and os.path.exists(image_path):
                             try:
-                                os.remove(image_path)  # Delete the image file
-                                # Update the DataFrame to remove the image path
-                                df_upd = df_view.copy()
-                                df_upd.at[row_to_delete_image, 'Image Path'] = None  # Remove the image path
-
-                                # Save the updated DataFrame back to Excel
-                                with pd.ExcelWriter(EXCEL, mode="a", engine="openpyxl", if_sheet_exists="replace") as writer:
-                                    df_upd.to_excel(writer, sheet_name=sheet_name, index=False)
-
-                                st.success(f"✅ Image for Hole {df_view.loc[row_to_delete_image, 'Hole']} deleted successfully.")
-                                st.toast(f"Image for Hole {df_view.loc[row_to_delete_image, 'Hole']} deleted successfully 🖼️", icon="🖼️")
+                                os.remove(image_path)
                             except Exception as e:
-                                st.error(f"❌ Failed to delete image for Hole {df_view.loc[row_to_delete_image, 'Hole']}: {e}")
-                        else:
-                            st.warning(f"⚠️ No image found for Hole {df_view.loc[row_to_delete_image, 'Hole']} at {image_path}.")
-                    
-                    import time
-                    time.sleep(1.5)  # short pause to let message show
-                    st.rerun()
+                                st.error(f"❌ Failed to delete image: {e}")
+                        df_upd.at[idx_orig, 'Image Path'] = None
 
+                    # Save updated Excel
+                    try:
+                        with pd.ExcelWriter(EXCEL, mode="a", engine="openpyxl", if_sheet_exists="replace") as writer:
+                            df_upd.to_excel(writer, sheet_name=sheet_name, index=False)
+                        st.success("✅ Images deleted successfully.")
+                        st.toast("Selected images deleted successfully 🖼️", icon="🖼️")
+                        import time
+                        time.sleep(1.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Failed to save changes: {e}")
             except Exception as e:
                 st.error(f"❌ Failed to delete images: {e}")
 
-
     # ===================== EDIT MEASUREMENT DATA =====================
-    st.markdown("### ✏️ Edit Measurement Data (Excel-style 1-based Index)")
-
+    st.markdown("### ✏️ Edit Measurement Data ")
     if df_view.empty:
         st.info("No data to edit.")
     else:
         total_rows = len(df_view)
         st.info(f"Enter the **row number** as shown in the table (1 to {total_rows}).")
-
         edit_row_display = st.number_input(
-            "Enter Row Number to Edit",
+            "Enter Row Number to Edit (Press ENTER to edit the row number)",
             min_value=1,
             max_value=total_rows,
             value=1,
             step=1
         )
-
         edit_row = edit_row_display - 1
         selected_row = df_view.iloc[edit_row]
         st.markdown(f"**Editing Row {edit_row_display}** — Piece ID: `{selected_row.get('Piece ID', 'N/A')}`")
 
-        # ---------- EDITABLE COLUMNS ----------
         editable_cols = [
-            "Measured Date", "Batch Cleaning", "Machine", "Part Type", "Chamber", "Piece ID",
-            "Hole", "Feature", "Value", "Nominal", "LSL", "USL", "Status", "Part In/Out", "Notes", "Image Path"
+            "Measured Date", "Batch Cleaning", "Machine", "Part Type", "Chamber",
+            "Piece ID", "Hole", "Feature", "Value",
+            "Part In/Out", "Notes", "Image Path"
         ]
         editable_cols = [c for c in editable_cols if c in df_view.columns]
-
-        # Drop the extra `ImagePath` column if it exists
-        if 'ImagePath' in df_view.columns:
-            df_view.drop(columns=['ImagePath'], inplace=True)
-
-        # Rename `ImagePath` to `Image Path` (if necessary)
-        if 'Image Path' not in df_view.columns:
-            if 'ImagePath' in df_view.columns:
-                df_view.rename(columns={'ImagePath': 'Image Path'}, inplace=True)
 
         with st.form("form_edit_row_excel_like"):
             new_entries = {}
             for col in editable_cols:
                 val = selected_row[col]
-
-                # Use date_input for Measured Date
                 if col == "Measured Date":
                     try:
-                        if pd.isna(val) or val in ["", None]:
-                            date_val = datetime.now().date()  # default to today if empty/NaT
-                        else:
-                            date_val = pd.to_datetime(val).date()
-                    except Exception:
-                        date_val = datetime.now().date()
-                    new_entries[col] = st.date_input(
-                        "Measured Date",
-                        value=date_val,
-                        key=f"edit_{col}"
-                    )
-
-                # Use number_input for Batch Cleaning
-                elif col == "Batch Cleaning":
-                    try:
-                        batch_val = float(val) if val != "" else 0
+                        date_val = pd.to_datetime(val).date() if pd.notna(val) else datetime.now().date()
                     except:
-                        batch_val = 0
+                        date_val = datetime.now().date()
+                    new_entries[col] = st.date_input("Measured Date", value=date_val, key=f"edit_{col}")
+                    
+                elif col == "Batch Cleaning":
+                    # Ensure value is float to match min_value and step type
+                    batch_val = 0.0 if val in [None, ""] else float(val)
                     new_entries[col] = st.number_input(
                         "Batch Cleaning (optional)",
                         value=batch_val,
                         min_value=0.0,
+                        max_value=None,  # explicitly allow None
                         step=1.0,
                         format="%.0f",
                         key=f"edit_{col}"
                     )
+
                 else:
-                    new_entries[col] = st.text_input(
-                        col,
-                        value="" if pd.isna(val) else str(val),
-                        key=f"edit_{col}"
-                    )
+                    new_entries[col] = st.text_input(col, value="" if pd.isna(val) else str(val), key=f"edit_{col}")
 
-            # 🔹 NEW: Part In/Out selection (already in editable_cols)
             part_inout_val = selected_row.get("Part In/Out", "IN")
-            edit_part_inout = st.selectbox(
-                "Part In/Out",
-                options=["IN", "OUT"],
-                index=0 if str(part_inout_val).upper() == "IN" else 1
-            )
+            edit_part_inout = st.selectbox("Part In/Out", options=["IN", "OUT"], index=0 if str(part_inout_val).upper() == "IN" else 1)
 
-            # Check for Hole Image Path Upload
-            hole_type = selected_row.get('Hole', 'N/A')  # Get the hole type (e.g., H1, H2)
+            hole_type = selected_row.get('Hole', 'N/A')
             hole_image = st.file_uploader(f"Upload Image for Hole {hole_type}", type=["png", "jpg", "jpeg"], key=f"hole_{hole_type}")
-
             if hole_image:
                 feature_type = selected_row.get("Feature", "Unknown")
                 image_filename = f"{selected_row['Hole']}_{feature_type}.jpg"
@@ -1371,68 +1534,55 @@ with tabs[2]:
                 with open(image_path, "wb") as img_file:
                     img_file.write(hole_image.getbuffer())
                 new_entries["Image Path"] = image_path
-                st.markdown(
-                    f'<a href="file:///{os.path.abspath(image_path)}" target="_blank">'
-                    f'<img src="file:///{os.path.abspath(image_path)}" width="400" style="border-radius: 10px; cursor: pointer;" /></a>',
-                    unsafe_allow_html=True
-                )
+                st.markdown(f'<a href="file:///{os.path.abspath(image_path)}" target="_blank">'
+                            f'<img src="file:///{os.path.abspath(image_path)}" width="400" style="border-radius: 10px; cursor: pointer;" /></a>',
+                            unsafe_allow_html=True)
 
             save_clicked = st.form_submit_button("💾 Save Changes")
 
         if save_clicked:
-            df_upd = df_view.copy()
-            for col, txt in new_entries.items():
+            # Map edit to original Excel index
+            orig_idx = selected_row["_orig_index"]
+            df_upd = df_view_orig.copy()
+            for col, val in new_entries.items():
                 if col == "Measured Date":
-                    df_upd.at[edit_row, col] = txt.strftime("%Y-%m-%d")  # just date
+                    df_upd.at[orig_idx, col] = val.strftime("%Y-%m-%d")
                 elif col == "Batch Cleaning":
-                    df_upd.at[edit_row, col] = txt if txt != 0 else ""
-                elif col in ["Value", "Nominal", "LSL", "USL"]:
-                    txt_str = "" if txt is None else str(txt).strip()
-                    if txt_str == "":
-                        df_upd.at[edit_row, col] = pd.NA
-                    else:
-                        try:
-                            df_upd.at[edit_row, col] = float(txt_str)
-                        except Exception:
-                            df_upd.at[edit_row, col] = txt_str
+                    df_upd.at[orig_idx, col] = val if val != 0 else ""
+                elif col == "Value":
+                    try:
+                        df_upd.at[orig_idx, col] = float(val)
+                    except:
+                        df_upd.at[orig_idx, col] = val
                 else:
-                    df_upd.at[edit_row, col] = txt
+                    df_upd.at[orig_idx, col] = val
 
-            # 🔹 Save Part In/Out selection
-            df_upd.at[edit_row, "Part In/Out"] = edit_part_inout
+            df_upd.at[orig_idx, "Part In/Out"] = edit_part_inout
 
-            # 🔹 Keep column order same: Piece ID → Part In/Out → Batch Cleaning → rest
-            if "Piece ID" in df_upd.columns and "Part In/Out" in df_upd.columns:
-                cols = list(df_upd.columns)
-                if "Part In/Out" in cols:
-                    cols.remove("Part In/Out")
-                idx = cols.index("Piece ID")
-                cols.insert(idx + 1, "Part In/Out")
-                # Insert Batch Cleaning right after Part In/Out
-                if "Batch Cleaning" in cols:
-                    cols.remove("Batch Cleaning")
-                idx_part = cols.index("Part In/Out")
-                cols.insert(idx_part + 1, "Batch Cleaning")
-                df_upd = df_upd[cols]
-
-            df_upd = df_upd.loc[:, ~df_upd.columns.str.contains("^Unnamed", case=False)]
+            # Recalculate Status
+            try:
+                val = df_upd.at[orig_idx, "Value"]
+                lsl = df_upd.at[orig_idx, "LSL"]
+                usl = df_upd.at[orig_idx, "USL"]
+                if pd.notna(val) and pd.notna(lsl) and pd.notna(usl):
+                    df_upd.at[orig_idx, "Status"] = "Fail" if val < lsl or val > usl else "Pass"
+                else:
+                    df_upd.at[orig_idx, "Status"] = "N/A"
+            except:
+                df_upd.at[orig_idx, "Status"] = "N/A"
 
             try:
                 with pd.ExcelWriter(EXCEL, mode="a", engine="openpyxl", if_sheet_exists="replace") as writer:
                     df_upd.to_excel(writer, sheet_name=sheet_name, index=False)
-
                 st.success(f"✅ Row {edit_row_display} updated successfully in Excel and table.")
                 st.toast(f"Row {edit_row_display} updated successfully ✅", icon="✅")
                 import time
                 time.sleep(1.5)
                 st.rerun()
-
-            except PermissionError:
-                st.error("❌ Excel file is open. Please **close Excel first** and try again.")
             except Exception as e:
                 st.error(f"❌ Failed to save changes: {e}")
 
-                
+                    
 # ------------------ TAB 3: View Spec ------------------
 with tabs[3]:
     st.subheader("Specs — Limits & Tolerances")
@@ -1499,16 +1649,18 @@ with tabs[3]:
 with tabs[4]:
     show_reference_photos()
 
-
 # ------------------ TAB 5: Workbook ------------------
 with tabs[5]:
     st.subheader("Excel Files")
 
-    # --- Selection for which Excel file to open ---
+    # --- Excel file paths ---
+    TREND_EXCEL = os.path.join(os.getcwd(), "trendchart.xlsx")  # Ensure path is relative to current folder
+
     excel_options = {
         "Main Data Workbook": EXCEL,
-        "Trend Charts Workbook": "trendchart.xlsx"
+        "Trend Charts Workbook": TREND_EXCEL
     }
+
     selected_file_label = st.selectbox("Select Excel File to Open", list(excel_options.keys()))
     selected_file_path = excel_options[selected_file_label]
 
@@ -1528,9 +1680,16 @@ with tabs[5]:
 
     with col_dl:
         try:
-            with open(selected_file_path, "rb") as fh:
-                data = fh.read()
-            st.download_button(f"📥 Download '{selected_file_label}'", data, file_name=os.path.basename(selected_file_path))
+            if os.path.exists(selected_file_path):
+                with open(selected_file_path, "rb") as fh:
+                    data = fh.read()
+                st.download_button(
+                    f"📥 Download '{selected_file_label}'",
+                    data,
+                    file_name=os.path.basename(selected_file_path)
+                )
+            else:
+                st.warning(f"File '{selected_file_label}' not found. Cannot download.")
         except Exception as e:
             st.error(f"File '{selected_file_label}' not ready: {e}")
 
@@ -1540,16 +1699,224 @@ st.markdown("<small style='color:#999'>© 2025 — SA PM Logger • Test6</small
 
 theme_css = """
 <style>
-
-/* 🔹 Add it anywhere inside here */
 div[data-testid="stAppViewContainer"] > header h1,
 div[data-testid="stAppViewContainer"] > header h2,
 div[data-testid="stHeader"] h1,
 div[data-testid="stHeader"] h2 {
     color: #0033cc !important; /* ✅ Dark Blue */
 }
-
 </style>
 """
 st.markdown(theme_css, unsafe_allow_html=True)
 
+# ------------------ TAB 6: Professional Summary Dashboard ------------------
+with tabs[6]:
+
+    import pandas as pd
+    import numpy as np
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    import plotly.graph_objects as go
+
+    st.markdown("""
+        <div style="padding:15px; background-color:#e6f2ff; border-radius:10px;">
+            <h2 style="text-align:center; color:#003366;">🏭 FUJI ELECTRIC – SA-CVD PMSA SPEC CONTROL SYSTEM</h2>
+            <h3 style="text-align:center; color:#003366;">📘 Measurement Summary Report</h3>
+        </div>
+    """, unsafe_allow_html=True)
+
+    st.write("")
+    st.write("This dashboard provides a overview of Mixing Block and Gas-Water Block measurements with automatic spec checking, KPI metrics, and Excel export.")
+
+    # ------------------ Helper Functions ------------------
+    def classify_hole(hole_name):
+        hole_name = str(hole_name).upper()
+        if hole_name in ["H1", "H2", "H3", "H4"]:
+            return "Inner"
+        elif hole_name in ["H5", "H6", "H7", "H8", "H9", "H10"]:
+            return "Outer"
+        return "Unknown"
+
+    def highlight_spec(val):
+        if val == "No":
+            return "background-color:#f9c0c0"
+        return "background-color:#d4f4dd"
+
+    # ------------------ Generate Report Button ------------------
+    if st.button("🟢 Generate Summary Report"):
+
+        with st.spinner("⏳ Generating your summary report..."):
+
+            try:
+                # Load Excel Data
+                df_mb = pd.read_excel("test6.xlsx", sheet_name="Mixing Block Data")
+                df_gwb = pd.read_excel("test6.xlsx", sheet_name="Gas-Water Block Data")
+
+                for df in [df_mb, df_gwb]:
+                    df.fillna("", inplace=True)
+                    df["Value"] = pd.to_numeric(df["Value"], errors="coerce")
+                    df["Hole Type"] = df["Hole"].apply(classify_hole)
+                    df["In Spec"] = np.where(
+                        (df["Value"] >= df["LSL"]) & (df["Value"] <= df["USL"]),
+                        "Yes", "No"
+                    )
+
+                # ------------------ KPI Metrics ------------------
+                total_measurements = len(df_mb) + len(df_gwb)
+                total_oos = (df_mb["In Spec"] == "No").sum() + (df_gwb["In Spec"] == "No").sum()
+                in_spec_rate = (1 - total_oos / total_measurements) * 100
+
+                col1, col2, col3 = st.columns(3)
+                col1.metric("📏 Total Measurements", total_measurements)
+                col2.metric("🟢 In-Spec Rate", f"{in_spec_rate:.2f}%")
+                col3.metric("🔴 Out-of-Spec Count", total_oos)
+
+                st.markdown("---")
+
+                display_cols = ["Hole Type", "Hole", "Piece ID", "Part Type",
+                                "Value", "LSL", "USL", "In Spec"]
+
+                # ------------------ MIXING BLOCK ------------------
+                st.markdown("## 🟦 Mixing Block Summary")
+                df_mb_show = df_mb[display_cols].copy()
+                df_mb_show.index = np.arange(1, len(df_mb_show)+1)
+                st.dataframe(df_mb_show.style.applymap(highlight_spec, subset=["In Spec"]))
+
+                st.markdown("### 🔴 Out of Spec (Mixing Block)")
+                df_mb_oos = df_mb[df_mb["In Spec"] == "No"][display_cols].copy()
+                df_mb_oos.index = df_mb_show.index[df_mb["In Spec"] == "No"]
+                if df_mb_oos.empty:
+                    st.success("All Mixing Block measurements are within specification.")
+                else:
+                    st.dataframe(df_mb_oos.style.applymap(highlight_spec, subset=["In Spec"]))
+
+                st.markdown("---")
+
+                # ------------------ GAS WATER BLOCK ------------------
+                st.markdown("## 🟩 Gas-Water Block Summary")
+                df_gwb_show = df_gwb[display_cols].copy()
+                df_gwb_show.index = np.arange(1, len(df_gwb_show)+1)
+                st.dataframe(df_gwb_show.style.applymap(highlight_spec, subset=["In Spec"]))
+
+                st.markdown("### 🔴 Out of Spec (Gas-Water Block)")
+                df_gwb_oos = df_gwb[df_gwb["In Spec"] == "No"][display_cols].copy()
+                df_gwb_oos.index = df_gwb_show.index[df_gwb["In Spec"] == "No"]
+                if df_gwb_oos.empty:
+                    st.success("All Gas-Water Block measurements are within specification.")
+                else:
+                    st.dataframe(df_gwb_oos.style.applymap(highlight_spec, subset=["In Spec"]))
+
+                st.markdown("---")
+
+                # ------------------ In-Spec vs Out-of-Spec Chart ------------------
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=["Mixing Block", "Gas-Water Block"],
+                    y=[len(df_mb[df_mb["In Spec"]=="Yes"]), len(df_gwb[df_gwb["In Spec"]=="Yes"])],
+                    name="In Spec", marker_color="#2ca02c"
+                ))
+                fig.add_trace(go.Bar(
+                    x=["Mixing Block", "Gas-Water Block"],
+                    y=[len(df_mb[df_mb["In Spec"]=="No"]), len(df_gwb[df_gwb["In Spec"]=="No"])],
+                    name="Out of Spec", marker_color="#d62728"
+                ))
+
+                fig.update_layout(
+                    barmode='stack',
+                    title=dict(
+                        text="📊 In-Spec vs Out-of-Spec Measurements",
+                        font=dict(size=18, color="#003366")
+                    ),
+                    xaxis=dict(
+                        title=dict(
+                            text="Block Type",
+                            font=dict(size=14, color="#003366")
+                        )
+                    ),
+                    yaxis=dict(
+                        title=dict(
+                            text="Count",
+                            font=dict(size=14, color="#003366")
+                        )
+                    ),
+                    legend=dict(title="Status", font=dict(size=12)),
+                    template="plotly_white",
+                    margin=dict(l=60, r=40, t=80, b=40),
+                    height=400
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                # ------------------ CREATE PROFESSIONAL EXCEL ------------------
+                def write_sheet(ws, df, title):
+                    # Add Index column starting from 1
+                    df_insert = df.copy()
+                    df_insert.insert(0, "Index", np.arange(1, len(df_insert)+1))
+
+                    # Merge top row for title
+                    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(df_insert.columns))
+                    cell = ws.cell(row=1, column=1, value=title)
+                    cell.font = Font(size=14, bold=True, color="003366")
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                    cell.fill = PatternFill(start_color="cce6ff", fill_type="solid")
+
+                    # Leave one blank row
+                    ws.append([])
+
+                    # Header styling
+                    header_fill = PatternFill(start_color="ADD8E6", fill_type="solid")
+                    header_font = Font(bold=True, color="003366")
+                    thin_border = Border(left=Side(style='thin'),
+                                         right=Side(style='thin'),
+                                         top=Side(style='thin'),
+                                         bottom=Side(style='thin'))
+
+                    for c, col in enumerate(df_insert.columns, 1):
+                        cell = ws.cell(row=3, column=c, value=col)
+                        cell.font = header_font
+                        cell.fill = header_fill
+                        cell.alignment = Alignment(horizontal="center")
+                        cell.border = thin_border
+
+                    # Write data rows
+                    for r, row in enumerate(df_insert.itertuples(index=False), 4):
+                        for c, val in enumerate(row, 1):
+                            cell = ws.cell(row=r, column=c, value=val)
+                            cell.alignment = Alignment(horizontal="center")
+                            cell.border = thin_border
+                            if df_insert.columns[c-1] == "In Spec":
+                                if val == "No":
+                                    cell.fill = PatternFill(start_color="F9C0C0", fill_type="solid")
+                                else:
+                                    cell.fill = PatternFill(start_color="D4F4DD", fill_type="solid")
+
+
+                buffer = BytesIO()
+                wb = Workbook()
+
+                ws1 = wb.active
+                ws1.title = "Mixing Block - All"
+                write_sheet(ws1, df_mb_show, "Mixing Block - All Measurements")
+
+                ws2 = wb.create_sheet("Mixing Block - OOS")
+                write_sheet(ws2, df_mb_oos, "Mixing Block - Out of Spec Measurements")
+
+                ws3 = wb.create_sheet("Gas Water Block - All")
+                write_sheet(ws3, df_gwb_show, "Gas-Water Block - All Measurements")
+
+                ws4 = wb.create_sheet("Gas Water Block - OOS")
+                write_sheet(ws4, df_gwb_oos, "Gas-Water Block - Out of Spec Measurements")
+
+                wb.save(buffer)
+                buffer.seek(0)
+
+                st.success("✅ Summary report generated successfully!")
+                st.download_button(
+                    label="📥 Download Summary Excel",
+                    data=buffer,
+                    file_name="SA_CVD_Summary.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+            except Exception as e:
+                st.error(f"⚠️ Error: {e}")
