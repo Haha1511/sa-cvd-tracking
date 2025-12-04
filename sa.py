@@ -287,11 +287,39 @@ def _status_from_value(part, hole, feat, val):
         return ("PASS" if val is not None else "FAIL", None, None, None)
 
 def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, measurements, measured_date=None, batch_number=None, timestamp=None):
+    import streamlit as st  # ensure Streamlit is available
+
     ensure_workbook()
     ts = timestamp if timestamp is not None else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    df_part = read_sheet_safe(SHEET_MB if part == "Mixing Block" else SHEET_GW)
-    df_other = read_sheet_safe(SHEET_GW if part == "Mixing Block" else SHEET_MB)
-    df_specs = read_sheet_safe(SHEET_SPECS)
+
+    # ---------------------- USE SESSION CACHE ----------------------
+    if "excel_cache" not in st.session_state:
+        st.session_state["excel_cache"] = {}
+
+    cache = st.session_state["excel_cache"]
+
+    # Load part sheet from cache or Excel
+    sheet_name = SHEET_MB if part == "Mixing Block" else SHEET_GW
+    other_sheet_name = SHEET_GW if part == "Mixing Block" else SHEET_MB
+
+    if sheet_name in cache:
+        df_part = cache[sheet_name]
+    else:
+        df_part = read_sheet_safe(sheet_name)
+        cache[sheet_name] = df_part
+
+    if other_sheet_name in cache:
+        df_other = cache[other_sheet_name]
+    else:
+        df_other = read_sheet_safe(other_sheet_name)
+        cache[other_sheet_name] = df_other
+
+    if SHEET_SPECS in cache:
+        df_specs = cache[SHEET_SPECS]
+    else:
+        df_specs = read_sheet_safe(SHEET_SPECS)
+        cache[SHEET_SPECS] = df_specs
+    # ---------------------------------------------------------------
 
     # Format measured date to only YYYY-MM-DD
     if measured_date is None:
@@ -320,7 +348,7 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
             "Machine": machine,
             "Part Type": part,
             "Part In/Out": part_flow,
-            "Batch Cleaning": batch_number if batch_number is not None else "",  # <-- only this column
+            "Batch Cleaning": batch_number if batch_number is not None else "",
             "Chamber": chamber,
             "Piece ID": piece_id,
             "Hole": f"H{hole}",
@@ -334,7 +362,6 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
             "Image Path": img_path
         })
 
-
     if not rows:
         return False, "No rows to add"
 
@@ -345,11 +372,15 @@ def add_measurement_rows(part, machine, chamber, piece_id, part_flow, notes, mea
 
     df_part = pd.concat([df_part, df_append], ignore_index=True)
 
+    # ---------------------- UPDATE CACHE BEFORE WRITING ----------------------
+    cache[sheet_name] = df_part
+
     sheets = {
-        SHEET_MB: df_part if part == "Mixing Block" else df_other,
-        SHEET_GW: df_part if part == "Gas/Water Block" else df_other,
-        SHEET_SPECS: df_specs
+        SHEET_MB: cache[SHEET_MB],
+        SHEET_GW: cache[SHEET_GW],
+        SHEET_SPECS: cache[SHEET_SPECS]
     }
+    # ------------------------------------------------------------------------
 
     saved, alt = atomic_write_all(EXCEL, sheets)
     if saved:
@@ -446,18 +477,45 @@ def show_trend_df(part, machine=None, chamber=None, hole=None, feature=None):
 
 def delete_rows_by_indexes(part, indexes_str):
     """
-    Final fixed version:
+    Final fixed version with session cache:
     ✅ Handles 0 correctly
     ✅ Deletes last row in any range
     ✅ Works with ranges like 0-5, 1-3, 0, 3,5-7
     ✅ Safe Excel rewrite
     ✅ Uses st.rerun() (no experimental_rerun)
+    ✅ Prevents data loss when switching holes
     """
 
     import streamlit as st
 
-    # --- Load sheet ---
-    df = read_sheet_safe(SHEET_MB if part == "Mixing Block" else SHEET_GW)
+    # ---------------------- USE SESSION CACHE ----------------------
+    if "excel_cache" not in st.session_state:
+        st.session_state["excel_cache"] = {}
+    cache = st.session_state["excel_cache"]
+
+    sheet_name = SHEET_MB if part == "Mixing Block" else SHEET_GW
+    other_sheet_name = SHEET_GW if part == "Mixing Block" else SHEET_MB
+
+    # Load sheets from cache or Excel
+    if sheet_name in cache:
+        df = cache[sheet_name]
+    else:
+        df = read_sheet_safe(sheet_name)
+        cache[sheet_name] = df
+
+    if other_sheet_name not in cache:
+        df_other = read_sheet_safe(other_sheet_name)
+        cache[other_sheet_name] = df_other
+    else:
+        df_other = cache[other_sheet_name]
+
+    if SHEET_SPECS not in cache:
+        specs_df = read_sheet_safe(SHEET_SPECS)
+        cache[SHEET_SPECS] = specs_df
+    else:
+        specs_df = cache[SHEET_SPECS]
+    # ---------------------------------------------------------------
+
     if df.empty:
         return False, "No data found in sheet."
 
@@ -502,18 +560,18 @@ def delete_rows_by_indexes(part, indexes_str):
     except Exception as e:
         return False, f"Error deleting rows: {e}"
 
+    # ---------------------- UPDATE CACHE BEFORE WRITING ----------------------
+    cache[sheet_name] = df_after
+
+    sheets = {
+        SHEET_MB: cache[SHEET_MB],
+        SHEET_GW: cache[SHEET_GW],
+        SHEET_SPECS: cache[SHEET_SPECS]
+    }
+    # ------------------------------------------------------------------------
+
     # --- Save back to Excel ---
     try:
-        other_sheet = SHEET_GW if part == "Mixing Block" else SHEET_MB
-        df_other = read_sheet_safe(other_sheet)
-        specs_df = read_sheet_safe(SHEET_SPECS)
-
-        sheets = {
-            SHEET_MB: df_after if part == "Mixing Block" else df_other,
-            SHEET_GW: df_after if part == "Gas/Water Block" else df_other,
-            SHEET_SPECS: specs_df,
-        }
-
         saved, alt = atomic_write_all(EXCEL, sheets)
         if saved:
             try:
@@ -546,31 +604,26 @@ def delete_rows_by_indexes(part, indexes_str):
 
 
 def open_excel_file():
-    import streamlit as st
-
     if not os.path.exists(EXCEL):
-        st.warning("Workbook not created yet.")
         return False, "Workbook not created yet"
-
-    with open(EXCEL, "rb") as f:
-        excel_bytes = f.read()
-
-    st.download_button(
-        label="📂 Download / Open Excel File",
-        data=excel_bytes,
-        file_name=os.path.basename(EXCEL),
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-    return True, "Download ready"
-
+    try:
+        os.startfile(os.path.abspath(EXCEL))
+        return True, "Opened with default app"
+    except Exception:
+        try:
+            webbrowser.open(os.path.abspath(EXCEL))
+            return True, "Opened via webbrowser"
+        except Exception as e:
+            return False, f"Cannot open: {e}"
 
 def get_reference_image_path():
     if os.path.exists(GW_IMAGE):
         return os.path.abspath(GW_IMAGE)
     return None
+
 def show_reference_photos():
     import streamlit as st
-    import os, base64
+    import os, base64, webbrowser
     from PIL import Image
 
     st.subheader("📸 Reference Photos Viewer")
@@ -691,31 +744,21 @@ def show_reference_photos():
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
-    # --- Step 5: Open Externally Section (fixed for Streamlit) ---
-    st.markdown("### 🔍 Open / Download Image Externally")
+    # --- Step 5: Open Externally Section ---
+    st.markdown("### 🔍 Open Externally")
     open_view = st.selectbox("Select View to Open:", list(image_map[part_type].keys()), key=f"open_{part_type}")
-    img_path = image_map[part_type][open_view]
-
-    if os.path.exists(img_path):
-        with open(img_path, "rb") as f:
-            st.download_button(
-                label=f"Open / Download {open_view}",
-                data=f,
-                file_name=os.path.basename(img_path),
-                mime="image/png",
-                key=f"dl_open_{part_type}"
-            )
-    elif os.path.exists(PLACEHOLDER):
-        with open(PLACEHOLDER, "rb") as f:
-            st.download_button(
-                label=f"Open / Download {open_view} (placeholder)",
-                data=f,
-                file_name=os.path.basename(PLACEHOLDER),
-                mime="image/png",
-                key=f"dl_open_placeholder_{part_type}"
-            )
-    else:
-        st.warning(f"⚠️ {open_view} image not found.")
+    if st.button("Open Selected Image", key=f"open_btn_{part_type}"):
+        img_path = image_map[part_type][open_view]
+        if os.path.exists(img_path):
+            try:
+                os.startfile(img_path)
+            except Exception:
+                webbrowser.open(img_path)
+        elif os.path.exists(PLACEHOLDER):
+            st.info(f"{open_view} image missing. Opening placeholder.")
+            webbrowser.open(PLACEHOLDER)
+        else:
+            st.warning(f"⚠️ {open_view} image not found.")
 
     # --- Step 6: Download Section ---
     st.markdown("### ⬇️ Download Image")
@@ -805,3 +848,43 @@ def open_file_crossplatform(path):
         return True
     except:
         return False
+
+import streamlit as st
+
+def get_sheet_cached(sheet_name):
+    """
+    Read a sheet from Excel but cache in session_state to avoid losing changes
+    """
+    if "excel_cache" not in st.session_state:
+        st.session_state["excel_cache"] = {}
+    
+    cache = st.session_state["excel_cache"]
+
+    if sheet_name in cache:
+        return cache[sheet_name]
+
+    # Otherwise read from Excel
+    df = read_sheet_safe(sheet_name)
+    cache[sheet_name] = df
+    return df
+
+def update_sheet_cached(sheet_name, df):
+    """
+    Update session_state cache AND write to Excel safely
+    """
+    if "excel_cache" not in st.session_state:
+        st.session_state["excel_cache"] = {}
+
+    st.session_state["excel_cache"][sheet_name] = df
+
+    # Save all sheets to Excel
+    sheets_to_save = {
+        SHEET_MB: get_sheet_cached(SHEET_MB),
+        SHEET_GW: get_sheet_cached(SHEET_GW),
+        SHEET_SPECS: get_sheet_cached(SHEET_SPECS)
+    }
+    saved, alt = atomic_write_all(EXCEL, sheets_to_save)
+    if saved:
+        apply_excel_coloring_and_separator([SHEET_MB, SHEET_GW])
+    return saved, alt
+

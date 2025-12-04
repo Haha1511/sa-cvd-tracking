@@ -1271,16 +1271,28 @@ with tabs[2]:
                 valid_dates = df_view["Measured Date"].dropna()
                 min_date = valid_dates.min().date() if not valid_dates.empty else datetime.now().date()
                 max_date = valid_dates.max().date() if not valid_dates.empty else datetime.now().date()
-                start_date, end_date = st.date_input(
-                    "Measured Date Range",
-                    value=(min_date, max_date)
+
+                # Ensure the value is always a tuple for Streamlit
+                date_input_val = (min_date, max_date) if min_date != max_date else min_date
+
+                selected_dates = st.date_input(
+                    "Measured Date Range (Please select at least 2 dates. If you only want to view a single date, you need to click the filter date button twice)",
+                    value=date_input_val
                 )
+
+                # Ensure selected_dates is always a tuple (start, end)
+                if isinstance(selected_dates, tuple) or isinstance(selected_dates, list):
+                    start_date, end_date = selected_dates
+                else:
+                    start_date = end_date = selected_dates
+
                 df_view = df_view[
                     (df_view["Measured Date"].dt.date >= start_date) &
                     (df_view["Measured Date"].dt.date <= end_date)
                 ]
 
-        st.success(f"Filtered results: **{len(df_view)} rows**")
+            st.success(f"Filtered results: **{len(df_view)} rows**")
+
 
     # ===================== DISPLAY TABLE =====================
     import urllib.parse
@@ -1652,6 +1664,7 @@ with tabs[4]:
 # ------------------ TAB 5: Workbook ------------------
 with tabs[5]:
     st.subheader("Excel Files")
+    st.info("💡 It is strongly recommended to download a copy of the Excel file regularly to prevent any unexpected data loss.")
 
     # --- Excel file paths ---
     TREND_EXCEL = os.path.join(os.getcwd(), "trendchart.xlsx")  # Ensure path is relative to current folder
